@@ -126,6 +126,14 @@ function turtle.placeDown() return place("down") end
 -- trusting it: the left 3x3 (1,2,3 / 5,6,7 / 9,10,11), positional, one
 -- item per cell. Only the recipes the tests need.
 function mock.craftImpl(limit)
+  -- The failure seen in game: the method is callable with no crafting
+  -- table attached, and returns a bare false -- no message at all, which
+  -- is what distinguishes it from a genuine recipe mismatch.
+  local on = T.equipped or {}
+  if on.left ~= "minecraft:crafting_table"
+     and on.right ~= "minecraft:crafting_table" then
+    return false
+  end
   local GRID = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
   local cell = {}
   for i, slot in ipairs(GRID) do
@@ -160,15 +168,33 @@ end
 -- side comes back into that slot, so an empty selected slot unequips.
 -- turtle.craft exists only while a crafting table is actually on a side,
 -- which is the whole reason the capability cache has to be invalidated.
+-- mock.staleCraft reproduces a build where turtle.craft outlives the
+-- upgrade: the method stays callable after the table comes off.
 local function syncCraft()
   T.equipped = T.equipped or {}
   if T.equipped.left == "minecraft:crafting_table"
-     or T.equipped.right == "minecraft:crafting_table" then
+     or T.equipped.right == "minecraft:crafting_table"
+     or mock.staleCraft then
     turtle.craft = mock.craftImpl
   else
     turtle.craft = nil
   end
 end
+
+-- Newer CC can say what is on a side; older builds have no such call at
+-- all. A test models the old build by removing these, which mock.reset
+-- puts back -- returning nil from a present function means "nothing is
+-- equipped", a different answer from "this build cannot tell you".
+function mock.equippedLeft()
+  local n = (T.equipped or {}).left
+  return n and { name = n, count = 1 } or nil
+end
+function mock.equippedRight()
+  local n = (T.equipped or {}).right
+  return n and { name = n, count = 1 } or nil
+end
+turtle.getEquippedLeft, turtle.getEquippedRight =
+    mock.equippedLeft, mock.equippedRight
 
 local function equip(side)
   T.equipped = T.equipped or {}
@@ -388,6 +414,9 @@ function mock.reset()
   T.slots = {}
   T.equipped = nil
   turtle.craft = nil
+  mock.staleCraft = nil
+  turtle.getEquippedLeft, turtle.getEquippedRight =
+      mock.equippedLeft, mock.equippedRight
   mock.dropped = 0
   mock.crafted = 0
 end

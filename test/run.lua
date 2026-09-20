@@ -609,7 +609,7 @@ ok(tostring(why):find("one per cell", 1, true) ~= nil,
 -- No crafting table anywhere: say that, rather than "no recipe".
 turtleWith({ [8] = { name = WHEAT, count = 3 } })
 okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
-ok(not okCraft and tostring(why):find("no crafting table carried", 1, true) ~= nil,
+ok(not okCraft and tostring(why):find("none carried", 1, true) ~= nil,
    "with no table at all it says so", why)
 
 -- Carrying one is enough: the library equips it rather than making the
@@ -652,6 +652,49 @@ okCraft, why = inv.craft({ { "cobblestone", "cobblestone", "cobblestone" } })
 ok(not okCraft, "cobblestone in a row is not a recipe")
 ok(tostring(why):find("1=cobblestone", 1, true) ~= nil,
    "and the error shows the layout it refused", why)
+
+-- The failure seen in game: turtle.craft is callable with no crafting
+-- table attached (the method outlived the upgrade), so the old check --
+-- "does turtle.craft exist" -- skipped equipping and crafted against a
+-- turtle with nothing on its sides. It returns a bare false, no message,
+-- which reads as a wrong recipe.
+turtleWith({
+  [1] = { name = WHEAT, count = 3 },
+  [2] = { name = "minecraft:crafting_table", count = 1 },
+})
+mock.staleCraft = true
+turtle.craft = mock.craftImpl          -- present, nothing equipped
+caps.detect(true)
+ok(not caps.has("crafting"),
+   "a build that can report its sides is not fooled by the stale method")
+
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "it equips the table anyway and crafts", why)
+ok(inv.count("bread") == 1, "bread", inv.count("bread"))
+
+-- Same, on a build too old to report what is equipped: the only way to
+-- find out is to try, so it tries, then equips and retries once.
+turtleWith({
+  [1] = { name = WHEAT, count = 3 },
+  [2] = { name = "minecraft:crafting_table", count = 1 },
+})
+mock.staleCraft = true
+turtle.getEquippedLeft, turtle.getEquippedRight = nil, nil   -- older build
+turtle.craft = mock.craftImpl
+caps.detect(true)
+ok(inv.craftingTableEquipped() == nil, "this build cannot say what is on")
+
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "a failed craft is retried with the table on", why)
+ok(inv.count("bread") == 1, "and produces bread", inv.count("bread"))
+
+-- The retry must not fire when there is nothing to retry with.
+turtleWith({ [1] = { name = "minecraft:cobblestone", count = 3 } })
+mock.staleCraft = true
+turtle.getEquippedLeft, turtle.getEquippedRight = nil, nil
+turtle.craft = mock.craftImpl
+okCraft, why = inv.craft({ { "cobblestone", "cobblestone", "cobblestone" } })
+ok(not okCraft, "a genuinely wrong shape still fails")
 
 -- Malformed patterns are refused rather than half-executed.
 turtleWith({ [1] = { name = "minecraft:crafting_table", count = 1 } })

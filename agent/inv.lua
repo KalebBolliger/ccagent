@@ -437,6 +437,28 @@ function inv.clearGrid()
   return true
 end
 
+--- Is a crafting table actually on a side?
+---
+--- `turtle.craft` existing is not the same question. On at least some
+--- builds the method outlives the upgrade that added it: unequip the
+--- table and turtle.craft is still there, still callable, and returns
+--- false with no message -- which reads as "your recipe is wrong" when
+--- the truth is "there is no crafting table attached".
+---
+--- Returns true, false, or nil when this build cannot say (older CC has
+--- no getEquipped*). Callers must treat nil as "find out by trying".
+function inv.craftingTableEquipped()
+  if not _G.turtle then return false end
+  for _, side in ipairs({ "left", "right" }) do
+    local item = caps.equipped(side)
+    if item == nil then return nil end
+    if item and tostring(item.name or ""):find("crafting_table", 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
 --- What the crafting grid holds right now, for error messages: a craft
 --- that failed is only debuggable if you can see the layout it refused.
 function inv.gridSummary()
@@ -476,20 +498,29 @@ function inv.craft(pattern, opts)
   -- mining turtle quietly loses its pickaxe.
   local side = (opts.side == "left") and "left" or "right"
   local equippedHere, displaced = false, nil
-  if not turtle.craft then
-    if not inv.find("crafting_table") then
-      return false, "no crafting upgrade, and no crafting table carried"
-    end
+
+  --- Put a carried crafting table on. Remembers the displaced item, not
+  --- the slot it landed in: laying out the recipe can move that item
+  --- again, and then a slot number puts back nothing.
+  local function equipTable()
     local ok, slotOrErr = inv.equip("crafting_table", side)
-    if not ok then
-      return false, "could not equip the crafting table: " .. tostring(slotOrErr)
-    end
+    if not ok then return false, tostring(slotOrErr) end
     equippedHere = true
-    -- Whatever was on that side is now in the slot the table came from.
-    -- Remember the item, not the slot: laying out the recipe may move it
-    -- again, and then a slot number puts back the wrong thing or nothing.
     local was = inv.slot(slotOrErr)
     displaced = was and was.name or nil
+    return true
+  end
+
+  -- Ask whether a table is attached, not whether the method exists.
+  local attached = inv.craftingTableEquipped()
+  if attached == false or (attached == nil and not turtle.craft) then
+    if not inv.find("crafting_table") then
+      return false, "no crafting table attached, and none carried"
+    end
+    local ok, err = equipTable()
+    if not ok then
+      return false, "could not equip the crafting table: " .. err
+    end
     if not turtle.craft then
       return false, "equipped the crafting table but crafting is still unavailable"
     end
@@ -600,6 +631,19 @@ function inv.craft(pattern, opts)
 
   local ok, err = turtle.craft(opts.limit)
   inv.invalidate()
+
+  -- On a build that cannot tell us what is equipped, a failure here is
+  -- ambiguous: a wrong shape, or a method that outlived its upgrade. If
+  -- we are carrying a table and have not tried it, that is cheap to rule
+  -- out -- the layout is already correct, so the retry costs one equip.
+  if not ok and not equippedHere and inv.craftingTableEquipped() == nil
+     and inv.find("crafting_table") then
+    if equipTable() then
+      ok, err = turtle.craft(opts.limit)
+      inv.invalidate()
+    end
+  end
+
   if not ok then
     return finish(false, (err or "no matching recipe") ..
       " -- laid out " .. inv.gridSummary())

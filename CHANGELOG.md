@@ -78,6 +78,19 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **`turtle.craft` existing does not mean a crafting table is attached.**
+  On at least some builds the method outlives the upgrade that added it:
+  unequip the table and `turtle.craft` is still there, still callable,
+  and returns a bare `false` — no message — which reads as "your recipe
+  is wrong" when the truth is "there is nothing attached". Everything
+  here treated the method's presence as the capability, so `inv.craft`
+  skipped equipping and crafted against a turtle with bare sides. It now
+  asks what is on each side (`turtle.getEquippedLeft`/`Right`) and only
+  falls back to the method on builds too old to answer — and on those,
+  a failed craft with a table in the inventory is retried once with it
+  equipped, because trying is the only way to find out. `caps.equipped`
+  exposes the same question, and the `crafting` probe uses it, so
+  `/caps` stops reporting crafting on a turtle that cannot craft.
 - Item names could not be written bare. `inv.find("crafting_table")`
   returned nothing, because matching was exact and the item is
   `minecraft:crafting_table`. Generated code writes the short form

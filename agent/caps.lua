@@ -38,8 +38,32 @@ caps.register("unlimitedFuel", function()
   return turtle.getFuelLevel() == "unlimited"
 end)
 
+--- What is on a turtle's side, when the build can say. Returns the item
+--- detail, false for "nothing", or nil for "this build has no such call".
+function caps.equipped(side)
+  if not _G.turtle then return false end
+  local get = turtle[side == "left" and "getEquippedLeft" or "getEquippedRight"]
+  if not get then return nil end
+  local ok, item = pcall(get)
+  if not ok then return nil end
+  return type(item) == "table" and item or false
+end
+
+-- turtle.craft existing is weaker evidence than it looks: on at least
+-- some builds the method outlives the upgrade that added it, so a turtle
+-- with nothing on its sides still has a callable turtle.craft that
+-- returns a bare false. Ask what is attached where the build can say,
+-- and fall back to the method only when it cannot.
 caps.register("crafting", function()
-  return _G.turtle ~= nil and turtle.craft ~= nil
+  if not _G.turtle then return false end
+  for _, side in ipairs({ "left", "right" }) do
+    local item = caps.equipped(side)
+    if item == nil then return turtle.craft ~= nil end      -- cannot tell
+    if item and tostring(item.name or ""):find("crafting_table", 1, true) then
+      return true
+    end
+  end
+  return false
 end)
 
 caps.register("equip", function()
