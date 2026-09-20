@@ -58,9 +58,43 @@ does — nothing here currently relies on anything past 5.1.
   hazards in `lib.run` and why each exists, and a list of numbers in this
   codebase that are guesses rather than derivations.
 - **What actually changed and why, including corrected mistakes** →
-  `CHANGELOG.md`. The `frame` lint was wrong in 1.1.0 in a way that took a
-  direct challenge from the person who commissioned it to catch — worth
-  reading once so the same reasoning error doesn't recur.
+  `CHANGELOG.md`. The `frame` lint was wrong in 1.1.0 in a way no test
+  caught, because the tests were written from the same wrong assumption —
+  worth reading once so the same reasoning error doesn't recur.
+
+## Never commit
+
+This repository is public. Nothing that belongs to a person, a machine or a
+conversation goes into it — not into a file, and not into a commit message,
+which is just as public and much harder to correct later.
+
+- **Secrets.** API keys, tokens, cookies. The Anthropic key lives in
+  `/.ccagent/key` and any source token in `/.ccagent/token`, both outside
+  this tree by design, and `/.ccagent/` is `.gitignore`d so a
+  reconfiguration cannot drag them back in. A key in a diff is a key to
+  rotate, not a key to delete.
+- **Identifying details.** Names, emails, handles, server addresses, IPs,
+  world seeds, coordinates of anyone's actual base. Examples in docs are
+  invented ones (`files.mylan`, `OWNER/REPO`, `192.168.0.0/16`) and should
+  stay that way.
+- **Conversation specifics.** Session links, chat transcripts, ticket or
+  thread references, "as discussed", "the person who asked for this". Write
+  what changed and why it is right, in terms someone reading the repo cold
+  can check. If a decision came from an exchange, record the reasoning, not
+  the exchange.
+- **Machine-local paths.** Anything under a working directory, temp or
+  scratch directory from the environment a change happened to be made in.
+
+Commit trailers are subject to all of the above: `Co-Authored-By:` is fine,
+a session or conversation URL is not.
+
+Before pushing anything new here, and always before making history public:
+
+```
+git log --format='%an <%ae>%n%B' | grep -niE 'session_|claude\.ai/code|@[a-z0-9.-]+\.[a-z]{2,}'
+```
+
+Nothing should come back but `noreply@anthropic.com`.
 
 ## Habits specific to this repo
 
