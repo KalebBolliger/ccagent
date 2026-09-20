@@ -576,6 +576,43 @@ for _, front in ipairs({ "ui/controller.lua", "ui/host.lua" }) do
 end
 
 --------------------------------------------------------------------------
+group("the operator can change the inventory between jobs")
+
+-- Run a job, take the result out by hand, put fresh ingredients in, run
+-- the job again: it failed, reporting the item that had been removed as
+-- being in the way. The inventory cache is module-level and only the
+-- library's own operations invalidate it, so a turtle rearranged through
+-- its GUI stayed invisible for the rest of the session.
+
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:bread", count = 1 }
+ok(inv.count("bread") == 1, "the cache is warm")
+
+-- What opening the turtle's GUI looks like from in here: the world
+-- changes, nothing tells the library.
+mock.turtle.slots[1] = { name = "minecraft:wheat", count = 3 }
+ok(inv.count("bread") == 1, "and a manual change goes unnoticed",
+   inv.count("bread"))
+
+local r = executor.run([[ job.report(inv.count("bread")) ]], agent.env(), {})
+ok(r.ok and r.result == 0,
+   "but a program starts from what is actually there", r.result)
+ok(inv.count("wheat") == 3, "including the wheat that replaced it",
+   inv.count("wheat"))
+
+-- The same for the line describing the turtle to Claude: a stale one
+-- means the model plans against an inventory that no longer exists.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:bread", count = 1 }
+inv.count("bread")                                  -- warm it
+mock.turtle.slots[1] = { name = "minecraft:wheat", count = 3 }
+local situation = agent.situation()
+ok(situation:find("wheat", 1, true) ~= nil,
+   "the situation line is read fresh", situation)
+ok(situation:find("bread", 1, true) == nil,
+   "and does not describe what was taken out", situation)
+
+--------------------------------------------------------------------------
 group("crafting: the grid is not the inventory")
 
 -- The real sequence: a turtle holding wheat and a crafting table, asked

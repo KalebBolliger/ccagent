@@ -51,6 +51,18 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **The inventory cache outlived the inventory.** Run a job, take the
+  result out through the turtle's GUI, put fresh ingredients in, run the
+  job again — and it reported the item you had just removed as being in
+  the way. `agent/inv.lua` caches the inventory and only this library's
+  own operations invalidate it, so an operator rearranging the turtle by
+  hand was invisible for the rest of the session. The cache is now
+  dropped at both boundaries where the world is trusted again after an
+  arbitrary gap: before a program runs, and before the situation line
+  that describes the turtle to Claude is built. The second mattered as
+  much as the first — a stale line means the model plans against an
+  inventory that no longer exists.
+
 - **A turtle crafts from its whole inventory, not from the 3x3.** Three
   wheat laid out correctly in slots 1, 2 and 3 still gave "No matching
   recipes" whenever a surplus stack sat in slot 4 — and crafted the

@@ -117,6 +117,10 @@ end
 --- every request, and is the only per-request world state Claude needs in
 --- the common case.
 function agent.situation()
+  -- This is the one per-request description of the world Claude gets, so
+  -- it has to be read fresh: the operator may have loaded or emptied the
+  -- turtle by hand since the last one.
+  inv.invalidate()
   local bits = {
     "caps: " .. caps.summary(),
   }

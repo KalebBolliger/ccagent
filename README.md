@@ -514,7 +514,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 364
+`lua5.3 test/all.lua` runs the three suites against a mock world — 370
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
