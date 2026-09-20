@@ -1,0 +1,7 @@
+This directory is intentionally tracked-but-empty.
+
+If this repo is deployed by placing it at /ccagent on a turtle or host
+computer, this is where /ccagent/jobs/ lands -- the operator's saved and
+registered routines, plus jobs/index.json. .gitignore excludes both so a
+clone never ships someone else's saved programs, but the directory itself
+needs to exist for /save to work on a fresh checkout, hence this file.

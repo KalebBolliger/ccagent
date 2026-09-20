@@ -1,0 +1,673 @@
+--[[ test/run_lib.lua ---------------------------------------------------
+  The saved-routine subsystem: contracts, lint, registration gating, and
+  the nesting hazards.
+
+      lua5.3 test/run_lib.lua
+--------------------------------------------------------------------------]]
+
+package.path = "./?.lua;./?/init.lua;" .. package.path
+
+local mock = require("test.mock")
+mock.install()
+
+local pass, fail = 0, 0
+local function ok(cond, label, detail)
+  if cond then pass = pass + 1; print("  ok   " .. label)
+  else fail = fail + 1; print("  FAIL " .. label ..
+       (detail and ("  -- " .. tostring(detail)) or "")) end
+end
+local function group(name) print("\n" .. name) end
+
+local util     = require("agent.util")
+local geom     = require("agent.geom")
+local state    = require("agent.state")
+local caps     = require("agent.caps")
+local world    = require("agent.world")
+local nav      = require("agent.nav")
+local inv      = require("agent.inv")
+local block    = require("agent.block")
+local job      = require("agent.job")
+local contract = require("agent.contract")
+local lint     = require("agent.lint")
+local lib      = require("agent.lib")
+local agent    = require("agent.init")
+local executor = require("claude.executor")
+
+local function fresh()
+  mock.reset()
+  state.clear(); world.clear(); inv.invalidate()
+  lib.invalidate()
+  caps.detect(true)
+  nav.localFrame(geom.v(0, 64, 0), geom.NORTH)
+  nav.refuelHook = function(t) inv.refuel(t) end
+  if fs.exists("/ccagent/jobs/index.json") then fs.delete("/ccagent/jobs/index.json") end
+end
+
+--------------------------------------------------------------------------
+group("contract parsing")
+fresh()
+
+local GOOD = [[
+--[==[ @ccagent
+name:    stack
+doc:     stack cobble in a column above the caller
+frame:   relative
+args:    height:number=3, spec:string=minecraft:cobblestone
+needs:   caps=digging, item=minecraft:cobblestone, fuel=height*2
+returns: number of blocks placed
+]==]
+local placed = 0
+for i = 1, args.height do
+  job.checkAbort()
+  if nav.step("up") and block.place("down", args.spec) then placed = placed + 1 end
+end
+job.report(placed)
+]]
+
+do
+  local c, err = contract.parse(GOOD)
+  ok(c ~= nil, "parses a well-formed header", err)
+  if c then
+    ok(c.name == "stack" and c.frame == "relative", "name and frame")
+    ok(#c.args == 2, "two args parsed", #c.args)
+    ok(c.args[1].name == "height" and c.args[1].type == "number"
+       and c.args[1].default == 3, "typed arg with a numeric default")
+    ok(c.args[1].required == false, "a default makes an arg optional")
+    ok(c.needs.caps[1] == "digging", "caps requirement")
+    ok(c.needs.items[1] == "minecraft:cobblestone", "item requirement")
+    ok(c.needs.fuel == "height*2", "fuel expression kept verbatim")
+    ok(contract.signature(c):find("height%?") ~= nil, "signature marks optionals",
+       contract.signature(c))
+  end
+end
+
+do
+  local _, err = contract.parse("local x = 1")
+  ok(err == "no @ccagent header", "source without a header", err)
+
+  local _, e2 = contract.parse("--[[ @ccagent\ndoc: x\nframe: relative\n]]")
+  ok(e2 and e2:find("name"), "missing name is rejected", e2)
+
+  local _, e3 = contract.parse("--[[ @ccagent\nname: a\ndoc: d\nframe: sideways\n]]")
+  ok(e3 and e3:find("frame"), "unknown frame is rejected", e3)
+
+  local long = "--[[ @ccagent\nname: a\ndoc: " .. string.rep("x", 200)
+               .. "\nframe: anywhere\n]]"
+  local _, e4 = contract.parse(long)
+  ok(e4 and e4:find("doc is"), "an over-long doc is rejected (it rides in every prompt)", e4)
+end
+
+group("argument binding")
+do
+  local c = contract.parse(GOOD)
+  local a, err = contract.bindArgs(c, {})
+  ok(a and a.height == 3, "defaults fill in", err)
+  local b = contract.bindArgs(c, { height = "7" })
+  ok(b and b.height == 7 and type(b.height) == "number", "numeric coercion")
+  local cc = contract.parse([==[--[[ @ccagent
+name: n
+doc: d
+frame: anywhere
+args: target:pos
+]]]==])
+  local _, e = contract.bindArgs(cc, {})
+  ok(e and e:find("missing required"), "required arg enforced", e)
+  local _, e2 = contract.bindArgs(cc, { target = 5 })
+  ok(e2 and e2:find("position"), "pos type enforced", e2)
+end
+
+--------------------------------------------------------------------------
+group("lint: stripping comes first")
+do
+  -- A direction word inside a string must not read as a movement call, and
+  -- a coordinate inside a comment must not read as a hardcoded location.
+  local src = [[
+job.say("go forward and then left")
+-- move to {x=100,y=64,z=-300} eventually
+nav.step("north")
+]]
+  local findings = lint.check(src, lib.allowedNames())
+  ok(lint.has(findings, "relative-facing") == nil,
+     "prose in job.say is not a direction word")
+  ok(lint.has(findings, "absolute-coords") == nil,
+     "coordinates in a comment are not hardcoded coordinates")
+end
+
+group("lint: the checks that matter")
+do
+  local anchored = [[
+local p = nav.pos()
+block.clear(p, geom.add(p, {x=4, y=-16, z=4}))
+]]
+  local f = lint.check(anchored, lib.allowedNames())
+  ok(lint.has(f, "ambient-anchor") ~= nil, "ambient anchoring is detected")
+  ok(lint.has(f, "absolute-coords") == nil,
+     "a relative offset is not a world coordinate")
+
+  local absolute = [[
+nav.moveTo({x=120, y=64, z=-300})
+block.dig("down")
+]]
+  local f2 = lint.check(absolute, lib.allowedNames())
+  ok(lint.has(f2, "absolute-coords") ~= nil, "world coordinates detected")
+
+  local facing = [[ nav.step("forward") ]]
+  local f3 = lint.check(facing, lib.allowedNames())
+  ok(lint.has(f3, "relative-facing") ~= nil, "facing-relative word detected")
+
+  local calls = [[ lib.run("restock", {n=4}) ]]
+  local f4 = lint.check(calls, lib.allowedNames())
+  local c4 = lint.has(f4, "calls-library")
+  ok(c4 and c4.detail == "restock", "library call recorded by name",
+     c4 and c4.detail)
+
+  local undef = [[ local x = helper.waitFor(function() return true end)
+                   frobnicate(x) ]]
+  local f5 = lint.check(undef, lib.allowedNames())
+  local u = lint.has(f5, "undefined-global")
+  ok(u and u.detail:find("frobnicate"), "undefined global detected", u and u.detail)
+  ok(not lint.report(f5):find("helper"), "a real sandbox name is not flagged")
+
+  -- Legitimate nav.pos() uses must not trip the anchor check.
+  local legit = [[
+nav.moveTo(args.origin)
+local here = nav.pos()
+job.report({ back = geom.eq(here, args.origin) })
+]]
+  local f6 = lint.check(legit, lib.allowedNames())
+  ok(lint.has(f6, "ambient-anchor") == nil,
+     "a drift check reads position without anchoring to it")
+end
+
+group("lint: declaration vs source")
+do
+  local anchored = lint.check([[
+local p = nav.pos()
+block.clear(p, geom.add(p, {x=4, y=-4, z=4}))
+]], lib.allowedNames())
+
+  local e1 = lint.consistency({ frame = "anywhere" }, anchored)
+  ok(#e1 > 0 and e1[1]:find("anywhere"), "anywhere + anchor is rejected", e1[1])
+
+  local e2 = lint.consistency({ frame = "absolute" }, anchored)
+  ok(#e2 > 0, "absolute + anchor is rejected", e2[1])
+
+  -- Anchoring to nav.pos() in a relative routine is CORRECT behaviour, not
+  -- an error: called from a new position it does the relative thing there.
+  -- What it costs is targetability, which is a warning, not a refusal.
+  local e3, w3 = lint.consistency({ frame = "relative" }, anchored)
+  ok(#e3 == 0, "relative + anchor is allowed -- it is the correct reading",
+     e3[1])
+  ok(#w3 > 0 and w3[1]:find("cannot aim"),
+     "but warns that callers cannot target it", w3[1])
+
+  local clean = lint.check([[
+nav.moveTo(args.origin)
+job.report(1)
+]], lib.allowedNames())
+  local e4, w4 = lint.consistency({ frame = "relative" }, clean)
+  ok(#e4 == 0, "a correctly anchored routine passes", e4[1])
+end
+
+--------------------------------------------------------------------------
+group("registration gating")
+fresh()
+do
+  lib.save("stack", GOOD)
+  local res = require("ui.jobs").register("stack")
+  ok(res.ok, "a consistent routine registers",
+     res.errors and res.errors[1])
+  ok(lib.has("stack"), "and is callable")
+  ok(lib.state("stack").listed == true, "and listed by default")
+
+  -- The landmine: a header that lies about its frame.
+  local LIAR = [[
+--[==[ @ccagent
+name:  liar
+doc:   claims to be position-independent
+frame: anywhere
+]==]
+local p = nav.pos()
+block.clear(p, geom.add(p, {x=2, y=-2, z=2}))
+]]
+  lib.save("liar", LIAR)
+  local res2 = require("ui.jobs").register("liar")
+  ok(not res2.ok, "a header contradicting the source is refused")
+  ok(not lib.has("liar"), "and it is not callable")
+  ok(lib.source("liar") ~= nil, "but the program is still saved")
+
+  -- No header at all: the signal to offer a retrofit, not a bare failure.
+  lib.save("oneoff", "job.report(1)")
+  local res3 = require("ui.jobs").register("oneoff")
+  ok(not res3.ok and res3.needsRetrofit,
+     "a headerless program reports needsRetrofit")
+
+  -- Name mismatch.
+  lib.save("othername", GOOD)
+  local res4 = require("ui.jobs").register("othername")
+  ok(not res4.ok and res4.errors[1]:find("saved as"),
+     "header name must match the save name", res4.errors[1])
+end
+
+group("three states")
+fresh()
+do
+  lib.save("stack", GOOD)
+  lib.register("stack")
+  ok(lib.manifest():find("lib.run%('stack'"), "listed routines reach the prompt")
+
+  lib.expose("stack", false)
+  lib.invalidate()
+  ok(lib.manifest() == nil, "unlisted routines leave the prompt")
+  ok(lib.has("stack"), "but stay callable")
+
+  lib.expose("stack", true)
+  lib.invalidate()
+  lib.unregister("stack")
+  lib.invalidate()
+  ok(not lib.has("stack"), "unregister revokes callability")
+  ok(lib.source("stack") ~= nil, "and still leaves the source on disk")
+end
+
+group("listing version drives re-caching")
+fresh()
+do
+  local v0 = lib.listingVersion()
+  lib.save("stack", GOOD); lib.register("stack"); lib.invalidate()
+  local v1 = lib.listingVersion()
+  ok(v0 ~= v1, "registering moves the fingerprint")
+  lib.invalidate()
+  ok(lib.listingVersion() == v1, "and it is stable across reloads")
+  lib.expose("stack", false); lib.invalidate()
+  ok(lib.listingVersion() ~= v1, "exposing moves it too")
+end
+
+--------------------------------------------------------------------------
+group("calling a routine")
+fresh()
+do
+  mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+  inv.invalidate()
+  lib.save("stack", GOOD)
+  local res = require("ui.jobs").register("stack")
+  ok(res.ok, "registered", res.errors and res.errors[1])
+
+  local r = executor.run([[
+    local n = lib.run("stack", { height = 3 })
+    job.report({ placed = n })
+  ]], agent.env(), {})
+  ok(r.ok, "caller ran", r.error)
+  ok(r.result and r.result.placed == 3, "routine's report reached the caller",
+     r.result and r.result.placed)
+  ok(nav.pos().y == 67, "the turtle really moved", geom.tostring(nav.pos()))
+end
+
+group("needs are checked before the first instruction")
+fresh()
+do
+  lib.save("stack", GOOD); lib.register("stack")
+  -- No cobblestone in the inventory this time.
+  local before = geom.copy(nav.pos())
+  local r = executor.run([[ lib.run("stack", { height = 3 }) ]], agent.env(), {})
+  ok(not r.ok, "the call failed")
+  ok(tostring(r.error):find("needs minecraft:cobblestone"),
+     "and said exactly what was missing", r.error)
+  ok(geom.eq(nav.pos(), before),
+     "the turtle did not move before failing -- this is the whole point")
+end
+
+group("unregistered and unknown routines")
+fresh()
+do
+  lib.save("stack", GOOD)   -- saved, not registered
+  local r = executor.run([[ lib.run("stack") ]], agent.env(), {})
+  ok(not r.ok and tostring(r.error):find("not registered"),
+     "a saved-but-unregistered routine refuses to run", r.error)
+
+  local r2 = executor.run([[ lib.run("nope") ]], agent.env(), {})
+  ok(not r2.ok and tostring(r2.error):find("no saved routine"),
+     "an unknown name fails readably", r2.error)
+end
+
+--------------------------------------------------------------------------
+group("nesting: the distributed cycle")
+fresh()
+do
+  -- No single program contains the loop: a -> b -> c -> a.
+  local function routine(name, callee)
+    return ("--[==[ @ccagent\nname: %s\ndoc: link in a chain\nframe: anywhere\n]==]\n%s\njob.report('%s')\n")
+      :format(name, callee and ("lib.run('" .. callee .. "')") or "", name)
+  end
+  lib.save("a", routine("a", "b")); lib.register("a")
+  lib.save("b", routine("b", "c")); lib.register("b")
+  lib.save("c", routine("c", "a")); lib.register("c")
+
+  local r = executor.run([[ lib.run("a") ]], agent.env(), {})
+  ok(not r.ok, "the cycle is refused")
+  ok(tostring(r.error):find("cycle"), "and named as a cycle", r.error)
+  ok(tostring(r.error):find("a %-> b %-> c %-> a"),
+     "and prints the whole chain, which no single file shows", r.error)
+end
+
+group("nesting: depth cap")
+fresh()
+do
+  -- A chain with no cycle, longer than the cap.
+  for i = 1, 8 do
+    local callee = (i < 8) and ("d" .. (i + 1)) or nil
+    lib.save("d" .. i, ("--[==[ @ccagent\nname: d%d\ndoc: chain link\nframe: anywhere\n]==]\n%s\n")
+      :format(i, callee and ("lib.run('" .. callee .. "')") or "job.report('end')"))
+    lib.register("d" .. i)
+  end
+  local r = executor.run([[ lib.run("d1") ]], agent.env(), {})
+  ok(not r.ok and tostring(r.error):find("too deep"),
+     "nesting is capped", r.error)
+end
+
+group("nesting: state isolation")
+fresh()
+do
+  lib.save("inner", [[
+--[==[ @ccagent
+name:  inner
+doc:   reports its own value and writes a checkpoint
+frame: anywhere
+]==]
+job.checkpoint("mark", "inner-value")
+job.report("INNER")
+]])
+  lib.register("inner")
+
+  local r = executor.run([[
+    job.checkpoint("mark", "outer-value")
+    job.report("OUTER")
+    local got = lib.run("inner")
+    job.report({ outerStillMine = job.recall("mark"), innerReturned = got })
+  ]], agent.env(), {})
+
+  ok(r.ok, "ran", r.error)
+  ok(r.result and r.result.innerReturned == "INNER",
+     "the nested report is returned to the caller, not lost",
+     r.result and r.result.innerReturned)
+  ok(r.result and r.result.outerStillMine == "outer-value",
+     "the nested checkpoint did not collide with the caller's",
+     r.result and r.result.outerStillMine)
+end
+
+group("nesting: module flags restored")
+fresh()
+do
+  lib.save("flipper", [[
+--[==[ @ccagent
+name:  flipper
+doc:   deliberately leaves a module flag flipped
+frame: anywhere
+]==]
+block.restoreFacing = false
+nav.policy.dig = false
+error("boom")
+]])
+  lib.register("flipper")
+
+  local savedFacing = block.restoreFacing
+  local savedDig = nav.policy.dig
+  local r = executor.run([[ pcall(function() lib.run("flipper") end) ]],
+                         agent.env(), {})
+  ok(r.ok, "the caller survived the routine's error", r.error)
+  ok(block.restoreFacing == savedFacing,
+     "block.restoreFacing was restored even though the routine threw")
+  ok(nav.policy.dig == savedDig,
+     "nav.policy was restored even though the routine threw")
+end
+
+group("nesting: a routine's globals do not leak")
+fresh()
+do
+  lib.save("leaky", [[
+--[==[ @ccagent
+name:  leaky
+doc:   assigns a global
+frame: anywhere
+]==]
+sneaky = "from inside"
+job.report(1)
+]])
+  lib.register("leaky")
+  local r = executor.run([[
+    lib.run("leaky")
+    job.report({ leaked = sneaky })
+  ]], agent.env(), {})
+  ok(r.ok, "ran", r.error)
+  ok(r.result and r.result.leaked == nil,
+     "a global set inside a routine stays inside it",
+     r.result and r.result.leaked)
+end
+
+group("nesting: abort survives a routine's own pcall")
+fresh()
+do
+  lib.save("swallower", [[
+--[==[ @ccagent
+name:  swallower
+doc:   wraps its work in pcall, as a careless program might
+frame: anywhere
+]==]
+pcall(function()
+  for i = 1, 100 do job.checkAbort() end
+end)
+job.report("finished anyway")
+]])
+  lib.register("swallower")
+
+  local r = executor.run([[
+    job.checkAbort()
+    lib.run("swallower")
+    job.report("outer finished")
+  ]], agent.env(), {
+    onOutput = function() end,
+  })
+  -- Not aborted yet: baseline should succeed.
+  ok(r.ok, "baseline runs when no abort is pending", r.error)
+
+  -- Now abort mid-flight: the routine's pcall eats the sentinel, but the
+  -- lib.run boundary re-checks on the way out.
+  job.abortFlag = false
+  local env = agent.env()
+  local caught = executor.run([[
+    job.abortFlag = true
+    lib.run("swallower")
+    job.report("outer finished")
+  ]], env, {})
+  ok(caught.aborted, "the stop request was not swallowed", caught.error)
+  ok(caught.result ~= "outer finished",
+     "and the caller did not carry on past it")
+end
+
+--------------------------------------------------------------------------
+group("prompt integration")
+fresh()
+do
+  local prompt = require("claude.prompt")
+  local session = require("claude.session")
+
+  lib.save("stack", GOOD); lib.register("stack"); lib.invalidate()
+
+  local _, text = prompt.system({})
+  ok(text:find("SAVED ROUTINES") ~= nil, "the library index is in the prompt")
+  ok(text:find("lib%.run%('stack'") ~= nil, "with the routine's signature")
+  ok(text:find("REUSABLE ROUTINES") ~= nil, "contract instructions are present")
+  ok(text:find("frame: relative") ~= nil or text:find("relative   operates") ~= nil,
+     "frame semantics are explained")
+
+  -- The index must be in the cached prefix, not the live state block.
+  local situation = prompt.situation(agent)
+  ok(situation:find("lib%.run") == nil,
+     "the index is NOT in the per-request state line")
+
+  -- Registering something rebuilds the prefix exactly once.
+  local sess = session.new({ apiKey = "x", model = "m" }, agent)
+  local s1 = sess:buildSystem()
+  local s2 = sess:buildSystem()
+  ok(s1 == s2, "the prefix is stable when nothing changed")
+  lib.save("other", (GOOD:gsub("name:    stack", "name:    other")))
+  lib.register("other"); lib.invalidate()
+  local s3 = sess:buildSystem()
+  ok(s3 ~= s1, "registering rebuilds it")
+  local s4 = sess:buildSystem()
+  ok(s4 == s3, "and it is stable again afterwards")
+end
+
+group("the reusable flag reaches the model")
+fresh()
+do
+  local client  = require("claude.client")
+  local session = require("claude.session")
+  local sent = {}
+  local real = client.message
+  client.message = function(cfg, body)
+    sent[#sent + 1] = body.messages[#body.messages].content
+    return { text = "```lua\njob.report(1)\n```", usage = {}, blocks = {} }
+  end
+  local sess = session.new({ apiKey = "x", model = "m" }, agent)
+  sess:handle("dig a hole", { onEvent = function() end })
+  ok(not sent[1]:find("REUSABLE"), "a plain request carries no reusable flag")
+  sess:handle("dig a hole", { onEvent = function() end, reusable = true })
+  ok(sent[2]:find("THIS ONE SHOULD BE REUSABLE") ~= nil,
+     "a + request does")
+  client.message = real
+end
+
+--------------------------------------------------------------------------
+group("retrofit: promoting a one-off, with a stubbed API")
+fresh()
+do
+  local client  = require("claude.client")
+  local session = require("claude.session")
+  local jobs    = require("ui.jobs")
+
+  -- A program written as a one-off: anchors to nav.pos(), no header.
+  local ONEOFF = [[
+local p = nav.pos()
+block.clear(p, geom.add(p, {x=4, y=-8, z=4}))
+job.report("done")
+]]
+  lib.save("pit", ONEOFF, "dig a pit in front of me")
+
+  local res = jobs.register("pit")
+  ok(not res.ok and res.needsRetrofit, "a one-off cannot register as-is")
+  ok(lint.has(res.findings, "ambient-anchor") ~= nil,
+     "and the findings name the reason")
+
+  local seen
+  local real = client.message
+  client.message = function(cfg, body)
+    seen = body.messages[#body.messages].content
+    return { text = [[Here:
+```lua
+--[==[ @ccagent
+name:  pit
+doc:   excavate a pit below and around the caller
+frame: relative
+args:  size:number=4, depth:number=8
+needs: caps=digging
+]==]
+block.clear(args.origin, geom.add(args.origin,
+  {x=args.size, y=-args.depth, z=args.size}))
+job.report("done")
+```]], usage = {}, blocks = {} }
+  end
+
+  local sess = session.new({ apiKey = "x", model = "m" }, agent)
+  local newSrc, err = sess:retrofit("pit", ONEOFF,
+                                    lint.report(res.findings), "dig a pit")
+  client.message = real
+
+  ok(newSrc ~= nil, "retrofit returned a program", err)
+  ok(seen and seen:find("ambient%-anchor"),
+     "the lint findings were sent, so the model works from facts not guesses")
+  ok(seen and seen:find("Promote this saved program"), "and the framing is right")
+
+  if newSrc then
+    lib.save("pit", newSrc)
+    lib.invalidate()
+    local res2 = jobs.register("pit")
+    ok(res2.ok, "the promoted version registers",
+       res2.errors and res2.errors[1])
+    ok(lib.has("pit"), "and is callable")
+    local c = lib.contract("pit")
+    ok(c and c.frame == "relative", "as a relative routine")
+    ok(c and #c.args == 2, "with parameters where the hardcoding was",
+       c and #c.args)
+  end
+end
+
+group("coordinate frames: the failure that is actually silent")
+fresh()
+do
+  -- A routine built on fixed coordinates, registered under one local frame.
+  lib.save("gochest", [[
+--[==[ @ccagent
+name:  gochest
+doc:   go to the storage chest
+frame: absolute
+]==]
+nav.moveTo({x=20, y=64, z=-30})
+job.report("there")
+]])
+  local res = require("ui.jobs").register("gochest")
+  ok(res.ok, "an absolute routine registers", res.errors and res.errors[1])
+  local authored = lib.state("gochest").frameId
+  ok(authored ~= nil and authored:find("local:"),
+     "and records the coordinate frame it was written in", authored)
+
+  -- Same frame: it runs.
+  local r = executor.run([[ lib.run("gochest") ]], agent.env(), {})
+  ok(r.ok, "runs under the frame it was registered in", r.error)
+
+  -- The turtle is re-placed and boots a new local frame. The literals in
+  -- the routine now point somewhere else entirely, and nothing about the
+  -- code changed -- this is the case that would otherwise fail in silence.
+  nav.localFrame(geom.v(0, 64, 0), geom.NORTH)
+  state.set("frameId", "local:test:second-frame")
+  lib.invalidate()
+  local r2 = executor.run([[ lib.run("gochest") ]], agent.env(), {})
+  ok(not r2.ok, "refuses under a different local frame")
+  ok(tostring(r2.error):find("coordinate frame"),
+     "and says why in terms the repair loop can act on", r2.error)
+
+  -- A relative routine is immune, because it never referred to the frame.
+  lib.save("rel", [[
+--[==[ @ccagent
+name:  rel
+doc:   step once from the caller's position
+frame: relative
+]==]
+job.report(args.origin ~= nil)
+]])
+  require("ui.jobs").register("rel")
+  state.set("frameId", "local:test:third-frame")
+  lib.invalidate()
+  local r3 = executor.run([[ job.report(lib.run("rel")) ]], agent.env(), {})
+  ok(r3.ok and r3.result == true,
+     "a relative routine is unaffected by a frame change", r3.error)
+end
+
+group("re-saving revokes a stale registration")
+fresh()
+do
+  lib.save("stack", GOOD)
+  lib.register("stack")
+  ok(lib.has("stack"), "registered")
+  -- The source changes; the old validation no longer describes it.
+  lib.save("stack", GOOD .. "\n-- edited\n")
+  lib.invalidate()
+  ok(not lib.has("stack"),
+     "editing the source revokes registration until it is re-checked")
+  lib.register("stack"); lib.invalidate()
+  ok(lib.state("stack").listed == true,
+     "and re-registering restores the listing preference")
+end
+
+--------------------------------------------------------------------------
+print(("\n%d passed, %d failed"):format(pass, fail))
+os.exit(fail == 0 and 0 or 1)

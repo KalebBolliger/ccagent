@@ -1,0 +1,112 @@
+# Changelog
+
+Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
+Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
+`/state` or the install self-check.
+
+## 1.1.1
+
+**Fixed**
+
+- `geom.iterBox` was not actually lazy: it built the entire cell list before
+  returning the first one. A 48×48×48 excavation allocated ~110,000 tables
+  in one non-yielding stretch, on a runtime that terminates a computer for
+  going ten seconds without yielding. Rewritten as a true generator —
+  constant memory, first cell returns immediately, traversal order verified
+  byte-identical to the old implementation across seven cases.
+- The `frame` lint was over-strict. `ambient-anchor` (a routine capturing
+  `nav.pos()` and building outward from it) was rejected for `frame:
+  relative`, but that is *correct* behaviour — called from a new position it
+  does the relative thing there, which is the point. Demoted to a warning;
+  it now only flags that the routine loses the ability to be aimed via
+  `args.origin`, not that it's wrong. Still an error when the header
+  contradicts the code (`anywhere`/`absolute` combined with position
+  anchoring).
+- `claude/prompt.lua`'s contract instructions correspondingly stopped
+  telling the model to avoid `nav.pos()`, and now point its attention at
+  `needs:`, which is where real silent failures actually live (a missing
+  tool or item — the turtle moves, accomplishes nothing, reports
+  success-shaped output).
+
+**Added**
+
+- The coordinate-frame check the `frame` rework should have shipped with in
+  1.1.0: without GPS, `nav.localFrame()` now stamps a fresh frame id each
+  time a *new* local frame is established. A `frame: absolute` routine
+  records the id it was registered under; `lib.run` refuses to call it if
+  the turtle has since booted a different local frame (e.g. after being
+  broken and re-placed), rather than driving confidently to coordinates that
+  no longer mean what they did. GPS frames are all mutually consistent, so
+  GPS turtles never trip this. See `test/run_lib.lua` >
+  `"coordinate frames: the failure that is actually silent"`.
+
+## 1.1.0 — saved routines
+
+**Added**
+
+- `agent/contract.lua`, `agent/lint.lua`, `agent/lib.lua`: programs can be
+  promoted from one-off scripts to routines Claude can call by name —
+  `lib.run("quarry", {depth = 24})` — via a `@ccagent` contract header
+  (name, doc, `frame`, typed `args`, `needs`).
+- Three independent states per saved program: **saved** (source on disk,
+  operator-runnable, free) / **registered** (contract validated, callable by
+  generated code, free) / **listed** (name + doc in the cached system
+  prompt, ~15 tokens each). Tracked in `jobs/index.json`.
+- `+<request>` asks the model to write the contract header during the
+  original generation, in the call that was already being paid for.
+  `/register` on a headerless saved program offers a retrofit — one extra
+  call that re-parameterises it, seeded with the lint findings so the model
+  works from facts about its own source rather than re-reading it.
+- Registration is a gate, not a formality: it parses the header, lints the
+  source, and refuses to register when the declaration contradicts what the
+  code demonstrably does (`prompt.CONTRACT`, `lint.consistency`).
+- Nesting support in `agent/lib.lua`, because the hazards are almost never
+  about stack depth:
+  - **Distributed cycles** (`a → b → c → a` spread across separately saved
+    files, so no single file shows the loop) caught by a call stack of
+    *names*, which also prints the full chain in the error.
+  - **Shared module state** — `job.result`, `job.checkpoint` namespacing,
+    `block.restoreFacing`, `nav.policy` — saved and restored across every
+    `lib.run` boundary, including when the callee throws.
+  - **Swallowed aborts** — the stop signal (`job.ABORT`) is a sentinel
+    table, not a string, so a routine's own `pcall` cannot silently eat a
+    stop request.
+  - **Leaked globals** — routines compile against a child environment.
+- New commands: `/register`, `/unregister`, `/expose`, `/check`, `+` prefix.
+  `/jobs` now shows state per saved program.
+
+**Changed**
+
+- `ui/jobs.lua` rewritten as a thin operator-facing wrapper over
+  `agent/lib.lua`, which is where the actual store now lives (it has to be
+  reachable from `agent/` because running code calls into it).
+- System prompt grew from ~2,700 to ~3,500 tokens (rules + manifest +
+  contract instructions + examples), still fully cached. The saved-routine
+  index is part of the cached prefix, not the per-request state line, and
+  is rebuilt only when `lib.listingVersion()` actually changes.
+
+## 1.0.0 — initial
+
+- Core capability library: `nav` (position tracking, A* pathfinding,
+  obstacle memory, fuel), `block` (inspect/dig/place/attack in ten
+  direction words), `inv` (glob/tag/predicate item queries over a
+  tick-saving cache), `world` (persistent sparse block memory), `job`
+  (operator I/O, reboot-safe checkpoints), `caps` (runtime capability
+  probing).
+- `agent/registry.lua`: single source of declarations that generates both
+  the sandbox environment a generated program runs in and the API manifest
+  shown to Claude, so the two cannot drift apart. Capability-gated entries
+  are hidden from machines that lack the hardware and raise a readable
+  error if called anyway.
+- `claude/`: Messages API client (async via `http.request` + the event
+  loop, so a request never blocks the ability to cancel), cached system
+  prompt, code-fence extraction tolerant of untagged and truncated fences,
+  a sandboxed executor, and a session that repairs a failing program by
+  sending the error and prior output back for a fix.
+- Two front ends over the same core: `ui/controller.lua` (standalone
+  turtle, own key, own conversation) and `ui/host.lua` + `ui/worker.lua`
+  (a computer holds the key and dispatches to turtles over rednet, one
+  conversation per worker).
+- `test/mock.lua` + `test/run.lua`: a voxel world, a mocked turtle, and
+  enough of `fs`/`textutils`/`os` to exercise the whole core with `lua5.3`
+  outside Minecraft.

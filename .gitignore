@@ -1,0 +1,23 @@
+# Runtime artifacts. If this repo is deployed by placing it AT /ccagent on
+# a turtle or host computer (see README > Install), these are the paths
+# that fill up with the operator's own data at runtime and must never be
+# committed: saved/registered routines and the state that tracks them.
+/jobs/*.lua
+/jobs/index.json
+
+# The API key and turtle state (position, world memory, checkpoints) live
+# outside this tree by design -- /.ccagent/key and /.ccagent/state.json,
+# one level up from /ccagent -- so they cannot land here even by accident.
+# This entry only guards against someone reconfiguring config.lua paths to
+# point back inside the repo.
+/.ccagent/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+*~
+
+# Lua tooling, if a contributor adds any
+*.luac
+luacov.*.out
+luacov.report.out
