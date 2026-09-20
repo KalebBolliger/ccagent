@@ -341,6 +341,180 @@ function inv.fuelValue()
   return total
 end
 
+------------------------------------------------------------- crafting ----
+
+-- A turtle crafts from the left 3x3 of its 4x4 inventory. The fourth
+-- column is not part of the grid, which is what makes crafting fiddly:
+-- ingredients sitting in slots 4, 8, 12 or 16 are invisible to
+-- turtle.craft, and anything else left in the grid is part of the recipe
+-- whether you meant it or not.
+--
+--     1  2  3 | 4
+--     5  6  7 | 8      <- grid          spare ->
+--     9 10 11 | 12
+--    13 14 15 | 16
+--
+-- Recipes are positional. Three wheat stacked in one slot is not bread;
+-- three wheat in three adjacent grid slots is. Nothing in a generated
+-- script can be expected to know that, so it lives here.
+inv.GRID  = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
+inv.SPARE = { 4, 8, 12, 16 }
+
+local function gridSlot(row, col) return inv.GRID[(row - 1) * 3 + col] end
+
+local function isGridSlot(n)
+  for _, s in ipairs(inv.GRID) do if s == n then return true end end
+  return false
+end
+
+--- Move everything out of the crafting grid into the spare column.
+--- Returns true, or false plus what would not fit.
+function inv.clearGrid()
+  if not _G.turtle then return false, "not a turtle" end
+  for _, slot in ipairs(inv.GRID) do
+    if inv.slot(slot) then
+      local moved = false
+      for _, spare in ipairs(inv.SPARE) do
+        local there = inv.slot(spare)
+        if not there or (there.name == inv.slot(slot).name) then
+          turtle.select(slot)
+          if turtle.transferTo(spare) and not inv.slot(slot) then
+            moved = true
+            break
+          end
+        end
+      end
+      if not moved then
+        return false, ("slot %d is in the crafting grid and the spare " ..
+                       "column is full"):format(slot)
+      end
+    end
+  end
+  return true
+end
+
+--- Lay a recipe out in the crafting grid and craft it.
+---
+---   inv.craft({ { "*wheat", "*wheat", "*wheat" } })          -- bread
+---   inv.craft({ { "*_planks", "*_planks" },
+---               { "*_planks", "*_planks" } })                -- crafting table
+---
+--- `pattern` is up to three rows of up to three cells. A cell is an item
+--- spec (globs allowed) or nil for "leave empty". Cells are placed in the
+--- grid exactly as written, because recipes are shaped: three wheat in one
+--- slot is not bread, three wheat across three cells is.
+---
+--- opts.limit  craft at most this many times (default: as many as fit)
+---
+--- Returns true, or false plus a reason. Needs a crafting table equipped.
+function inv.craft(pattern, opts)
+  opts = opts or {}
+  if not _G.turtle then return false, "not a turtle" end
+  if not turtle.craft then
+    return false, "no crafting upgrade -- equip a crafting table first"
+  end
+  if type(pattern) ~= "table" or #pattern == 0 then
+    return false, "craft needs a pattern: rows of item specs"
+  end
+  if #pattern > 3 then return false, "a recipe is at most 3 rows" end
+
+  local target, order = {}, {}
+  for row = 1, #pattern do
+    local cells = pattern[row]
+    if type(cells) ~= "table" then return false, "each row must be a table" end
+    if #cells > 3 then return false, "a recipe row is at most 3 cells" end
+    for col = 1, #cells do
+      if cells[col] then
+        local slot = gridSlot(row, col)
+        target[slot] = cells[col]
+        order[#order + 1] = slot
+      end
+    end
+  end
+  if #order == 0 then return false, "the pattern asks for nothing" end
+
+  local function describe(spec)
+    return type(spec) == "string" and spec or "that item"
+  end
+
+  --- Move `count` items out of `slot` into the spare column. Only the
+  --- spare column will do: anything parked in the grid joins the recipe.
+  local function stash(slot, count)
+    local moved = 0
+    for _, spare in ipairs(inv.SPARE) do
+      if moved >= count then break end
+      local here = inv.slot(slot)
+      if not here then break end
+      local there = inv.slot(spare)
+      if spare ~= slot and (not there or there.name == here.name) then
+        turtle.select(slot)
+        if turtle.transferTo(spare, count - moved) then
+          inv.invalidate()
+          local after = inv.slot(slot)
+          moved = moved + (here.count - (after and after.count or 0))
+        end
+      end
+    end
+    if moved >= count then return true end
+    return false, ("slot %d must be emptied and the spare column " ..
+                   "(4, 8, 12, 16) is full"):format(slot)
+  end
+
+  -- Clear the grid of everything the recipe did not ask for, including
+  -- surplus in cells it did: a cell holds exactly one item.
+  for _, slot in ipairs(inv.GRID) do
+    local here = inv.slot(slot)
+    if here then
+      local spec = target[slot]
+      if spec and inv.matches(here, spec) then
+        if here.count > 1 then
+          local ok, err = stash(slot, here.count - 1)
+          if not ok then return false, err end
+        end
+      else
+        local ok, err = stash(slot, here.count)
+        if not ok then return false, err end
+        if inv.slot(slot) then
+          return false, ("could not clear slot %d"):format(slot)
+        end
+      end
+    end
+  end
+
+  -- Fill each cell from somewhere that is not itself a cell, so a source
+  -- is never a place we have already put an item.
+  for _, slot in ipairs(order) do
+    if not inv.slot(slot) then
+      local spec, from = target[slot], nil
+      for i = 1, inv.SLOTS do
+        if not target[i] then
+          local d = inv.slot(i, needsDetail(spec))
+          if d and inv.matches(d, spec) then from = i; break end
+        end
+      end
+      if not from then
+        return false, ("no %s left to put in slot %d -- the recipe needs " ..
+                       "one per cell"):format(describe(spec), slot)
+      end
+      turtle.select(from)
+      local moved = turtle.transferTo(slot, 1)
+      inv.invalidate()
+      if not moved then
+        return false, ("could not move %s into slot %d")
+          :format(describe(spec), slot)
+      end
+    end
+  end
+
+  local ok, err = turtle.craft(opts.limit)
+  inv.invalidate()
+  if not ok then
+    return false, (err or "no matching recipe") ..
+      " -- check the shape, one item per cell"
+  end
+  return true
+end
+
 --------------------------------------------------- external inventories ---
 
 --- Wrap an adjacent or networked inventory peripheral by name or type.

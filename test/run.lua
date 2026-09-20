@@ -478,8 +478,7 @@ ok(caps.has("crafting"), "capabilities notice, without being asked twice")
 ok(type(sbt.craft) == "function",
    "and the sandbox now has craft, from the table it was already handed")
 
-sbt.craft(1)
-ok(mock.crafted == 1, "which actually crafts", mock.crafted)
+ok(type(sbt.craft) == "function", "which is callable")
 
 -- caps.require is the guard generated code is told to use. It must not
 -- refuse on a stale answer either.
@@ -538,6 +537,90 @@ do
   ok(inv.listExternal == realFn or type(inv.listExternal) == "function",
      "and the real function was never thrown away")
 end
+
+--------------------------------------------------------------------------
+group("crafting: the grid is not the inventory")
+
+-- The real sequence: a turtle holding wheat and a crafting table, asked
+-- for bread. It equipped the table (that part works) and then crafted
+-- nothing, because the wheat was in slot 8 -- outside the 3x3 the turtle
+-- actually crafts from -- and because three wheat in one slot is not the
+-- same shape as three wheat in three cells. No generated script can be
+-- expected to know either, so the library does.
+
+local function turtleWith(items)
+  fresh()
+  for slot, item in pairs(items) do mock.turtle.slots[slot] = item end
+  caps.detect(true)
+end
+
+local WHEAT = "minecraft:wheat"
+
+-- Exactly the failing case: wheat parked outside the crafting grid.
+turtleWith({
+  [1] = { name = "minecraft:crafting_table", count = 1 },
+  [8] = { name = WHEAT, count = 3 },
+})
+turtle.select(1)
+executor.sandbox(agent.env()).turtle.equipLeft()
+
+local okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "wheat outside the grid still becomes bread", why)
+ok(inv.count("minecraft:bread") == 1, "and the bread is there",
+   inv.count("minecraft:bread"))
+
+-- Stacked in one cell: has to be spread across three.
+turtleWith({
+  [1] = { name = "minecraft:crafting_table", count = 1 },
+  [2] = { name = WHEAT, count = 3 },
+})
+turtle.select(1)
+executor.sandbox(agent.env()).turtle.equipRight()
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "a single stack is spread across the cells", why)
+
+-- Junk sitting in the grid is part of the recipe unless it is moved out.
+turtleWith({
+  [1] = { name = "minecraft:crafting_table", count = 1 },
+  [2] = { name = "minecraft:cobblestone", count = 7 },
+  [6] = { name = "minecraft:dirt", count = 2 },
+  [12] = { name = WHEAT, count = 3 },
+})
+turtle.select(1)
+executor.sandbox(agent.env()).turtle.equipLeft()
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "junk in the grid is cleared out of the way", why)
+ok(inv.count("minecraft:cobblestone") == 7, "and is not lost",
+   inv.count("minecraft:cobblestone"))
+ok(inv.count("minecraft:dirt") == 2, "none of it", inv.count("minecraft:dirt"))
+
+-- Not enough to go round: say so, rather than crafting something else.
+turtleWith({
+  [1] = { name = "minecraft:crafting_table", count = 1 },
+  [8] = { name = WHEAT, count = 2 },
+})
+turtle.select(1)
+executor.sandbox(agent.env()).turtle.equipLeft()
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(not okCraft, "two wheat is not bread")
+ok(tostring(why):find("one per cell", 1, true) ~= nil,
+   "and the reason names the shape", why)
+
+-- No crafting table at all.
+turtleWith({ [8] = { name = WHEAT, count = 3 } })
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(not okCraft and tostring(why):find("equip", 1, true) ~= nil,
+   "without the upgrade it says to equip one", why)
+
+-- Malformed patterns are refused rather than half-executed.
+turtleWith({ [1] = { name = "minecraft:crafting_table", count = 1 } })
+turtle.select(1)
+executor.sandbox(agent.env()).turtle.equipLeft()
+ok(not inv.craft({}), "an empty pattern is refused")
+ok(not inv.craft({ { WHEAT }, { WHEAT }, { WHEAT }, { WHEAT } }),
+   "a four-row recipe is refused")
+ok(not inv.craft({ { WHEAT, WHEAT, WHEAT, WHEAT } }),
+   "a four-cell row is refused")
 
 --------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))

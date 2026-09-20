@@ -186,6 +186,9 @@ registry.add("inv", inv, "inventory as a query, not sixteen slots", {
   { fn = "suck",     sig = "(dir, count?, opts?) -> gained" },
   { fn = "deposit",  sig = "(dir, opts?) -> n",             doc = "unload everything; opts.keep = spec to retain" },
   { fn = "refuel",   sig = "(target?, opts?) -> level",     doc = "burn carried fuel up to target" },
+  { fn = "craft",    sig = "(pattern, opts?) -> ok, err",
+    doc = "rows of item specs laid into the 3x3 grid, one item per cell; opts.limit" },
+  { fn = "clearGrid", sig = "() -> ok, err",               doc = "empty the crafting grid into slots 4/8/12/16" },
   { fn = "listExternal", sig = "(nameOrType?) -> {name=count}, err",
     doc = "read an adjacent/networked chest without moving items", requires = "modem" },
 })

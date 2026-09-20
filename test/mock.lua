@@ -129,9 +129,39 @@ local function equip(side)
     T.slots[T.sel] = nil
     T.equipped = T.equipped or {}
     T.equipped[side] = "minecraft:crafting_table"
+    -- Craft against the real grid, so tests prove the layout rather than
+    -- trusting it: the left 3x3 (1,2,3 / 5,6,7 / 9,10,11), positional,
+    -- one item per cell. Only the recipes the tests need.
     turtle.craft = function(limit)
-      mock.crafted = (mock.crafted or 0) + (limit or 1)
-      return true
+      local GRID = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
+      local cell = {}
+      for i, slot in ipairs(GRID) do
+        local s = T.slots[slot]
+        cell[i] = s and s.name or false
+        if s and s.count > 1 then
+          return false, "No matching recipes"   -- stacked is not shaped
+        end
+      end
+      local function only(...)
+        local want = { ... }                    -- grid indices that must be full
+        local set = {}
+        for _, i in ipairs(want) do set[i] = true end
+        for i = 1, 9 do
+          if set[i] and not cell[i] then return false end
+          if not set[i] and cell[i] then return false end
+        end
+        return true
+      end
+      local wheat = cell[1] == "minecraft:wheat" and cell[2] == "minecraft:wheat"
+                    and cell[3] == "minecraft:wheat"
+      if wheat and only(1, 2, 3) then
+        for _, slot in ipairs({ 1, 2, 3 }) do T.slots[slot] = nil end
+        local n = math.min(limit or 1, 1)
+        T.slots[1] = { name = "minecraft:bread", count = n }
+        mock.crafted = (mock.crafted or 0) + n
+        return true
+      end
+      return false, "No matching recipes"
     end
     return true
   end
