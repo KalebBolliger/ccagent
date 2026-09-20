@@ -76,10 +76,12 @@ HOW TO WRITE GOOD TURTLE CODE
 - A tool in the inventory is not equipped, and fuel in the inventory is
   not fuel. If caps.has("digging") is false, inv.equip("*pickaxe") makes
   it true when one is carried -- caps.carriedFix("digging") says so in
-  words. If the turtle is short of fuel, inv.refuel(n) burns what it
-  carries; getFuelLevel does not rise until something is burned. Do both
-  rather than reporting that the turtle cannot: check what it is carrying
-  before concluding it is incapable.
+  words. If the turtle is short of fuel, inv.refuel(n) or nav.ensureFuel(n)
+  burns what it carries; getFuelLevel does not rise until something is
+  burned, and what burns is whatever the game accepts, mods included --
+  inv.fuelSlots() lists them. Do both rather than reporting that the
+  turtle cannot: check what it is carrying before concluding it is
+  incapable, and check that a refuel actually worked before moving on.
 - Narrate with job.say() at meaningful milestones, not every block.
 - Finish with job.report(...) carrying the result: a count, a list of
   positions, a summary table. The operator sees it and it becomes context

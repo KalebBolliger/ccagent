@@ -288,9 +288,24 @@ function turtle.transferTo(dst, count)
 end
 function turtle.getFuelLevel() return T.fuel end
 function turtle.getFuelLimit() return 100000 end
+-- mock.fuelNames decides what burns. It deliberately does not care what
+-- the item is called in any particular mod: refuel(0) is how the game is
+-- asked, and asking is the whole point.
+mock.fuelNames = { "coal", "charcoal", "lignite", "lava_bucket", "_planks" }
+
+local function burnable(name)
+  for _, f in ipairs(mock.fuelNames) do
+    if name:find(f, 1, true) then return true end
+  end
+  return false
+end
+
 function turtle.refuel(n)
   local s = T.slots[T.sel]
-  if not s or not s.name:find("coal") then return false, "Items not combustible" end
+  if not s or not burnable(s.name) then
+    return false, "Items not combustible"
+  end
+  if n == 0 then return true end          -- "is this fuel?", consuming none
   local burn = math.min(n or s.count, s.count)
   s.count = s.count - burn
   if s.count <= 0 then T.slots[T.sel] = nil end

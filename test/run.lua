@@ -613,6 +613,64 @@ ok(situation:find("bread", 1, true) == nil,
    "and does not describe what was taken out", situation)
 
 --------------------------------------------------------------------------
+group("fuel is whatever the game will burn")
+
+-- A turtle at zero fuel carrying thirty-two lignite coal from a mod
+-- reported "Refueled: 0 -> 0" and then warned its way through a build it
+-- could not move for. inv.fuelItems was a list of vanilla item names, so
+-- a modpack's fuel matched nothing and looked like no fuel at all.
+fresh()
+mock.turtle.fuel = 0
+mock.turtle.slots[1] = { name = "thermal:lignite_coal", count = 32 }
+inv.invalidate()
+
+ok(not inv.matches({ name = "thermal:lignite_coal", count = 32 }, inv.fuelItems),
+   "no list here has heard of it")
+ok(#inv.fuelSlots() == 1, "but the game says it burns", #inv.fuelSlots())
+
+local level = inv.refuel(100)
+ok(level >= 100, "so the turtle refuels on it", level)
+ok(mock.turtle.fuel >= 100, "really refuels", mock.turtle.fuel)
+
+-- Asking costs nothing: refuel(0) is a question, not a burn.
+fresh()
+mock.turtle.fuel = 0
+mock.turtle.slots[1] = { name = "thermal:lignite_coal", count = 32 }
+inv.invalidate()
+inv.fuelSlots()
+ok(inv.count("thermal:lignite_coal") == 32, "probing burns nothing",
+   inv.count("thermal:lignite_coal"))
+
+-- Known fuels still go first, so a turtle does not burn the planks it is
+-- holding to build with while it has coal.
+fresh()
+mock.turtle.fuel = 0
+mock.turtle.slots[1] = { name = "minecraft:oak_planks", count = 64 }
+mock.turtle.slots[2] = { name = "minecraft:coal", count = 8 }
+inv.invalidate()
+inv.refuel(80)
+ok(inv.count("minecraft:oak_planks") == 64, "planks untouched",
+   inv.count("minecraft:oak_planks"))
+ok(inv.count("minecraft:coal") < 8, "coal burned instead",
+   inv.count("minecraft:coal"))
+
+-- And the caller can protect anything it needs.
+fresh()
+mock.turtle.fuel = 0
+mock.turtle.slots[1] = { name = "thermal:lignite_coal", count = 32 }
+inv.invalidate()
+inv.refuel(100, { keep = "*lignite*" })
+ok(mock.turtle.fuel == 0, "opts.keep is respected even when nothing else burns",
+   mock.turtle.fuel)
+
+-- nav.ensureFuel is what generated code calls; it has to benefit too.
+fresh()
+mock.turtle.fuel = 0
+mock.turtle.slots[1] = { name = "thermal:lignite_coal", count = 32 }
+inv.invalidate()
+ok(nav.ensureFuel(50), "nav.ensureFuel reaches its target", nav.fuel())
+
+--------------------------------------------------------------------------
 group("capabilities change, and not only when we change them")
 
 -- A turtle built a wall, ran out of fuel, and was then asked to break the

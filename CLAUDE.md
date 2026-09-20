@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-383 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+392 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. Every bug this project has
 actually shipped was the kind this catches — facing math, path replanning,
 sandbox leaks, nesting hazards. If you touched `agent/` or `claude/`, run it
@@ -132,6 +132,13 @@ Nothing should come back but `noreply@anthropic.com`.
   turtle that happened to boot facing a wall. `caps.summary` still has a
   `dig?` branch for unknown; if it can never fire again, something has
   re-collapsed the two answers.
+- Where the game can be asked, ask it. A hardcoded list of what counts as
+  fuel, what a recipe looks like, or which upgrades exist is a list that is
+  wrong on somebody's modpack — and wrong silently, as "this turtle has no
+  fuel" while it carries thirty-two lignite. `turtle.refuel(0)` and
+  `turtle.getEquippedLeft/Right` cost one call and cannot be out of date.
+  Keep the lists for *preference* (burn coal before planks) and let the
+  game decide *membership*.
 - A new file under `agent/`, `claude/` or `ui/` has to be added to
   `manifest.txt` as well, or turtles installed over the wire will not get
   it. `test/run_boot.lua` catches this; `lua5.3 test/all.lua` is the only

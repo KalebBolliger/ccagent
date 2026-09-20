@@ -51,6 +51,18 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **A hardcoded list decided what fuel is.** A turtle at zero fuel
+  carrying thirty-two lignite coal from a mod reported "Refueled: 0 -> 0"
+  and then warned its way through a build it could not move for.
+  `inv.fuelItems` was a list of vanilla item names used as the definition
+  of fuel, so a modpack's fuel matched nothing and read as no fuel at
+  all. `turtle.refuel(0)` asks the game whether the selected item burns,
+  consuming none of it, and that answer is right on every modpack. The
+  list survives as a *preference* — walked in order, so coal goes before
+  the planks a turtle is probably carrying to build with — and
+  `inv.fuelSlots()` exposes what the game will actually take.
+  `opts.keep` protects anything the caller needs.
+
 - **"I cannot tell" was recorded as "no".** A turtle built a wall, was
   handed a pickaxe, and refused to break the wall down: "this turtle
   lacks digging capability". The digging probe declines to answer when

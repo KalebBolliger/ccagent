@@ -24,6 +24,13 @@ local inv = {}
 
 inv.SLOTS = 16
 
+-- Burn these before anything else, in this order. This is a preference,
+-- not a definition: what counts as fuel is the game's business and a
+-- modpack's, and a hardcoded list quietly means "out of fuel" on a turtle
+-- carrying thirty-two lignite. turtle.refuel(0) answers the real question
+-- without consuming anything, so the list only decides what goes first --
+-- dedicated fuels before things a turtle is probably carrying to build
+-- with, which is why planks come after coal and order matters here.
 inv.fuelItems = {
   "minecraft:coal", "minecraft:charcoal", "minecraft:coal_block",
   "minecraft:lava_bucket", "minecraft:blaze_rod", "minecraft:dried_kelp_block",
@@ -302,27 +309,89 @@ end
 
 --- Burn fuel from the inventory until the level reaches `target`.
 --- Returns the new fuel level.
+--- Which slots the game itself will accept as fuel. Selecting a slot and
+--- asking turtle.refuel(0) burns nothing and settles the question for any
+--- mod's fuel, which no list here can.
+---
+--- opts.keep  a spec of items to leave alone
+function inv.fuelSlots(opts)
+  opts = opts or {}
+  if not _G.turtle or not turtle.refuel then return {} end
+  local found, verdict = {}, {}
+  local restore = turtle.getSelectedSlot and turtle.getSelectedSlot() or nil
+  for slot = 1, inv.SLOTS do
+    local d = inv.slot(slot)
+    if d and not (opts.keep and inv.matches(d, opts.keep)) then
+      if verdict[d.name] == nil then
+        turtle.select(slot)
+        verdict[d.name] = turtle.refuel(0) and true or false
+      end
+      if verdict[d.name] then found[#found + 1] = slot end
+    end
+  end
+  if restore then turtle.select(restore) end
+  return found
+end
+
+--- Burn carried fuel until the level reaches `target`.
+---
+--- opts.spec     burn only items matching this (the caller is restricting)
+--- opts.keep     never burn items matching this
+--- opts.perItem  how many to burn per attempt (default 1)
+---
+--- Without opts.spec, inv.fuelItems goes first and then anything the game
+--- accepts, so a turtle carrying a mod's fuel refuels instead of
+--- reporting that it cannot.
 function inv.refuel(target, opts)
   opts = opts or {}
   if not _G.turtle then return 0 end
   if caps.get("unlimitedFuel") then return math.huge end
   target = target or 1000
-  local base = opts.spec or inv.fuelItems
+
   local rejected = {}   -- items that looked like fuel but the game refused
-  local spec = function(d)
-    return not rejected[d.name] and inv.matches(d, base)
+  local function keepable(d)
+    return not (opts.keep and inv.matches(d, opts.keep))
   end
+  local function usable(entry)
+    return function(d)
+      return not rejected[d.name] and keepable(d) and inv.matches(d, entry)
+    end
+  end
+
+  --- The first slot holding the most preferred fuel available. Walks the
+  --- list in order rather than matching against it as a set: a set lets
+  --- slot order decide, which burns the planks in slot 1 while there is
+  --- coal in slot 2.
+  local function preferredSlot()
+    if opts.spec then return inv.find(usable(opts.spec)) end
+    for _, entry in ipairs(inv.fuelItems) do
+      local slot, d = inv.find(usable(entry))
+      if slot then return slot, d end
+    end
+    return nil
+  end
+
   local guard = 0
   while turtle.getFuelLevel() ~= "unlimited" and turtle.getFuelLevel() < target do
     guard = guard + 1
     if guard > inv.SLOTS * 4 then break end
-    local slot, detail = inv.find(spec)
+
+    local slot, detail = preferredSlot()
+    if not slot and not opts.spec then
+      -- Nothing from the list left. Ask the game what else will burn.
+      for _, candidate in ipairs(inv.fuelSlots({ keep = opts.keep })) do
+        local d = inv.slot(candidate)
+        if d and not rejected[d.name] then slot, detail = candidate, d; break end
+      end
+    end
     if not slot then break end
+
     turtle.select(slot)
     local burned = turtle.refuel(opts.perItem or 1)
     inv.invalidate(slot)
     if not burned and detail then rejected[detail.name] = true end
   end
+
   local lvl = turtle.getFuelLevel()
   return lvl == "unlimited" and math.huge or lvl
 end
