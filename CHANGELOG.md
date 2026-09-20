@@ -70,6 +70,20 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- `inv.craft` returns `ok, err, info`. A turtle can only craft while
+  carrying nothing but the ingredients, which makes a cluttered
+  inventory a normal outcome rather than an edge case — and what to do
+  about it (deposit, drop, give up) is the caller's decision, not the
+  library's. So the refusal carries facts rather than prose:
+  `info.reason == "inventory"` with `info.blocking` listing
+  `{slot, name, count}` for everything in the way, all of it, not the
+  three the message has room to name. Other reasons are `ingredients`
+  (with `have` and `cells`), `no_table`, `recipe` and `pattern`. The
+  prompt tells generated code to handle the inventory case — deposit and
+  retry, drop, or abort with a clear report — and `docs/EXTENDING.md`
+  generalises the rule: when a capability can fail in a way the caller
+  might reasonably fix, hand back structure, and never resolve it by
+  destroying something the operator owns.
 - `inv.craft(pattern)`. With the capability bug
   below fixed, the turtle equipped its crafting table and then crafted
   nothing: "No matching recipes". A turtle crafts from the left 3x3 of

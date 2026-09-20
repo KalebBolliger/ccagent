@@ -626,13 +626,55 @@ turtleWith({
   [6] = { name = "minecraft:dirt", count = 2 },
   [12] = { name = WHEAT, count = 3 },
 })
-okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+local info
+okCraft, why, info = inv.craft({ { WHEAT, WHEAT, WHEAT } })
 ok(not okCraft, "a turtle carrying other things cannot craft")
 ok(tostring(why):find("cobblestone", 1, true) ~= nil,
    "and the refusal names what is in the way", why)
 ok(inv.count("minecraft:cobblestone") == 7, "nothing was dropped to make room",
    inv.count("minecraft:cobblestone"))
 ok(inv.count("minecraft:dirt") == 2, "none of it", inv.count("minecraft:dirt"))
+
+-- The caller decides what to do about it, so it gets the facts, not
+-- just prose: which slots, what is in them, how much.
+ok(info and info.reason == "inventory", "the failure is labelled",
+   info and info.reason)
+ok(info and #info.blocking == 2, "with every blocking slot, not a sample",
+   info and #info.blocking)
+local seen = {}
+for _, b in ipairs(info and info.blocking or {}) do
+  seen[b.name] = b
+end
+ok(seen["minecraft:cobblestone"] and seen["minecraft:cobblestone"].count == 7,
+   "each carrying slot, name and count")
+ok(seen["minecraft:dirt"] and seen["minecraft:dirt"].slot == 6,
+   "and where to find it", seen["minecraft:dirt"] and seen["minecraft:dirt"].slot)
+
+-- A caller that acts on it can then craft: this is the deposit-and-retry
+-- a generated program is expected to write.
+for _, b in ipairs(info.blocking) do mock.turtle.slots[b.slot] = nil end
+inv.invalidate()
+ok(inv.craft({ { WHEAT, WHEAT, WHEAT } }), "clearing what it named is enough")
+
+-- Other failures are labelled too, so a caller can tell them apart.
+turtleWith({ [8] = { name = WHEAT, count = 3 } })
+okCraft, why, info = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(info and info.reason == "no_table", "a missing crafting table is its own reason",
+   info and info.reason)
+
+turtleWith({
+  [1] = { name = WHEAT, count = 2 },
+  [2] = { name = "minecraft:crafting_table", count = 1 },
+})
+okCraft, why, info = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(info and info.reason == "ingredients", "as is running short",
+   info and info.reason)
+ok(info and info.have == 2 and info.cells == 3, "with the count and the need",
+   info and (tostring(info.have) .. "/" .. tostring(info.cells)))
+
+okCraft, why, info = inv.craft({})
+ok(info and info.reason == "pattern", "and a malformed pattern",
+   info and info.reason)
 
 -- Not enough to go round: say so, rather than crafting something else.
 turtleWith({

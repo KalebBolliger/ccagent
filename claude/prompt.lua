@@ -56,14 +56,22 @@ HOW TO WRITE GOOD TURTLE CODE
 - Crafting goes through inv.craft, never turtle.craft, and never a
   hand-rolled equip. The recipe is read from the left 3x3 (slots 1,2,3 /
   5,6,7 / 9,10,11) but the WHOLE inventory is the crafting area: one item
-  anywhere else and the game refuses the recipe. So a turtle can only
-  craft while carrying nothing but the ingredients -- if inv.craft says
-  something is in the way, deposit or drop it and try again, or say so.
-  Recipes are shaped: bread is inv.craft({{"wheat","wheat","wheat"}}).
-  Surplus is spread across the cells and crafts repeatedly, so sixteen
-  wheat is five loaves in one call -- do not loop. inv.craft equips a
-  carried crafting table and puts back what it displaced, so do not check
-  caps.has("crafting") first; just call it and read the error.
+  anywhere else and the game refuses the recipe. Recipes are shaped:
+  bread is inv.craft({{"wheat","wheat","wheat"}}). Surplus is spread
+  across the cells and crafts repeatedly, so sixteen wheat is five loaves
+  in one call -- do not loop. inv.craft equips a carried crafting table
+  and puts back what it displaced, so do not check caps.has("crafting")
+  first; just call it.
+- A turtle can only craft while carrying nothing but the ingredients, so
+  a cluttered inventory is a normal outcome, not an edge case. inv.craft
+  returns ok, err, info; info.reason == "inventory" means it refused, and
+  info.blocking lists {slot, name, count} for everything in the way. It
+  will not drop the operator's belongings to make room -- that decision
+  is yours. Handle it: deposit into an adjacent chest with inv.deposit
+  and retry, drop it if the request implies the turtle is disposable, or
+  abort and job.report what is in the way. Aborting with a clear report
+  is a fine answer when the request does not say. The other reasons are
+  "ingredients", "no_table", "recipe" and "pattern".
 - Item names may be written bare: "wheat" matches "minecraft:wheat".
 - Narrate with job.say() at meaningful milestones, not every block.
 - Finish with job.report(...) carrying the result: a count, a list of

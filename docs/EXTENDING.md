@@ -151,6 +151,21 @@ Fuel is in the barrel at 118,64,-298.
 
 This re-caches the prompt once, then rides along free.
 
+## Failures a caller has to be able to act on
+
+`inv.craft` is the worked example: it can fail because the turtle is
+carrying something that is not an ingredient, and only the caller can
+decide whether to deposit it, drop it, or give up. So it returns
+`ok, err, info` with `info.reason` and, for that case, `info.blocking`
+listing `{slot, name, count}` for everything in the way.
+
+The rule it follows is worth copying. When a capability can fail in a way
+the caller might reasonably *fix*, hand back enough structure to fix it —
+not a sentence. Prose is for the operator; a table is for the program.
+And never resolve it by destroying something the operator owns: refusing
+with the facts is always available, and a generated script aborting with
+a clear report is a fine outcome.
+
 ## Shipping it
 
 Add the file to `manifest.txt`. That is the list `boot.lua` pulls onto a

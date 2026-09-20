@@ -473,14 +473,28 @@ end
 --- opts.side   which side to put the crafting table on
 --- opts.restore = false  leave the table equipped
 ---
---- Returns true, or false plus a reason.
+--- Returns true, or false, a readable reason, and a table the caller can
+--- branch on:
+---
+---   { reason = "inventory", blocking = { {slot=,name=,count=}, ... } }
+---   { reason = "ingredients", spec =, have =, cells = }
+---   { reason = "no_table" }  { reason = "recipe" }  { reason = "pattern" }
+---
+--- "inventory" is the one worth handling: a turtle can only craft while
+--- carrying nothing but the ingredients, and what to do about that --
+--- deposit into a chest, drop, or give up and say so -- is the caller's
+--- decision, not this function's. It will not throw the operator's
+--- belongings on the floor to make room.
 function inv.craft(pattern, opts)
   opts = opts or {}
   if not _G.turtle then return false, "not a turtle" end
   if type(pattern) ~= "table" or #pattern == 0 then
-    return false, "craft needs a pattern: rows of item specs"
+    return false, "craft needs a pattern: rows of item specs",
+           { reason = "pattern" }
   end
-  if #pattern > 3 then return false, "a recipe is at most 3 rows" end
+  if #pattern > 3 then
+    return false, "a recipe is at most 3 rows", { reason = "pattern" }
+  end
 
   local function describe(spec)
     return type(spec) == "string" and spec or "that item"
@@ -491,8 +505,12 @@ function inv.craft(pattern, opts)
   local groups, groupOf = {}, {}
   for row = 1, #pattern do
     local cells = pattern[row]
-    if type(cells) ~= "table" then return false, "each row must be a table" end
-    if #cells > 3 then return false, "a recipe row is at most 3 cells" end
+    if type(cells) ~= "table" then
+      return false, "each row must be a table", { reason = "pattern" }
+    end
+    if #cells > 3 then
+      return false, "a recipe row is at most 3 cells", { reason = "pattern" }
+    end
     for col = 1, #cells do
       local spec = cells[col]
       if spec then
@@ -510,7 +528,9 @@ function inv.craft(pattern, opts)
       end
     end
   end
-  if #order == 0 then return false, "the pattern asks for nothing" end
+  if #order == 0 then
+    return false, "the pattern asks for nothing", { reason = "pattern" }
+  end
 
   --- Which group, if any, an item belongs to.
   local function groupFor(detail)
@@ -523,18 +543,25 @@ function inv.craft(pattern, opts)
   -- Refuse before touching anything if the turtle is carrying something
   -- the recipe does not use: it cannot be parked, and dropping the
   -- operator's belongings to make room is not ours to decide.
-  local strays = {}
+  local blocking = {}
   for slot = 1, inv.SLOTS do
     local d = inv.slot(slot)
     if d and not groupFor(d) and not util.glob(d.name, "*crafting_table") then
-      strays[#strays + 1] = (d.name:gsub("^.*:", ""))
-      if #strays >= 3 then break end
+      blocking[#blocking + 1] = { slot = slot, name = d.name, count = d.count }
     end
   end
-  if #strays > 0 then
+  if #blocking > 0 then
+    -- Every blocking slot goes back to the caller; the message names a
+    -- few so it stays readable on a 39-column screen.
+    local names = {}
+    for i = 1, math.min(3, #blocking) do
+      names[i] = (blocking[i].name:gsub("^.*:", ""))
+    end
+    if #blocking > #names then names[#names + 1] = "..." end
     return false, ("the whole inventory is the crafting area, so it must " ..
-                   "hold only the ingredients -- drop or deposit %s first")
-      :format(table.concat(strays, ", "))
+                   "hold only the ingredients -- %s %s in the way")
+      :format(table.concat(names, ", "), #blocking == 1 and "is" or "are"),
+           { reason = "inventory", blocking = blocking }
   end
 
   --------------------------------------------------------------- equip ---
@@ -559,20 +586,25 @@ function inv.craft(pattern, opts)
   local attached = inv.craftingTableEquipped()
   if attached == false or (attached == nil and not turtle.craft) then
     if not inv.find("crafting_table") then
-      return false, "no crafting table attached, and none carried"
+      return false, "no crafting table attached, and none carried",
+             { reason = "no_table" }
     end
     local ok, err = equipTable()
-    if not ok then return false, "could not equip the crafting table: " .. err end
+    if not ok then
+      return false, "could not equip the crafting table: " .. err,
+             { reason = "no_table" }
+    end
     if not turtle.craft then
-      return false, "equipped the crafting table but crafting is still unavailable"
+      return false, "equipped the crafting table but crafting is still unavailable",
+             { reason = "no_table" }
     end
   end
 
-  local function finish(ok, err)
+  local function finish(ok, err, info)
     if equippedHere and opts.restore ~= false then
       if displaced then inv.equip(displaced, side) else inv.unequip(side) end
     end
-    return ok, err
+    return ok, err, info
   end
 
   ------------------------------------------------------------- arrange ---
@@ -590,7 +622,9 @@ function inv.craft(pattern, opts)
     local per = math.floor(total / n)
     if per < 1 then
       return finish(false, ("only %d %s for %d cells -- the recipe needs " ..
-                            "one per cell"):format(total, describe(g.spec), n))
+                            "one per cell"):format(total, describe(g.spec), n),
+                    { reason = "ingredients", spec = g.spec, have = total,
+                      cells = n })
     end
     local extra = total - per * n
     for i, slot in ipairs(g.cells) do
@@ -633,7 +667,10 @@ function inv.craft(pattern, opts)
       end
       if inv.slot(slot) then
         return finish(false, ("slot %d holds the wrong ingredient and there " ..
-                              "is nowhere to put it"):format(slot))
+                              "is nowhere to put it"):format(slot),
+                    { reason = "inventory", blocking = {
+                        { slot = slot, name = inv.slot(slot).name,
+                          count = inv.slot(slot).count } } })
       end
     end
   end
@@ -662,7 +699,9 @@ function inv.craft(pattern, opts)
       local d = inv.slot(slot)
       return finish(false, ("%s in slot %d is outside the recipe, and the " ..
                             "whole inventory is the crafting area")
-        :format((d.name:gsub("^.*:", "")), slot))
+        :format((d.name:gsub("^.*:", "")), slot),
+        { reason = "inventory",
+          blocking = { { slot = slot, name = d.name, count = d.count } } })
     end
   end
 
@@ -680,7 +719,8 @@ function inv.craft(pattern, opts)
 
   if not ok then
     return finish(false, (err or "no matching recipe") ..
-      " -- laid out " .. inv.gridSummary())
+      " -- laid out " .. inv.gridSummary(),
+      { reason = "recipe", grid = inv.gridSummary() })
   end
   return finish(true)
 end

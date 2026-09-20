@@ -421,6 +421,7 @@ block.digVein("*_ore", {max=64})      -- flood-fill a vein and come back
 block.clear(a, b, {dumpWhenFull=fn})  -- excavate a box
 block.fill(a, b, "*_planks")          -- build one
 inv.count({tag="minecraft:logs"})     -- tag- and glob-aware matching
+inv.craft({{"wheat","wheat","wheat"}}) -- equips a carried table, spreads surplus
 world.find("*chest*", {near=nav.pos()})  -- answered from memory, zero server calls
 helper.roundTrip(fn)                  -- always end up where you started
 ```
@@ -428,6 +429,32 @@ helper.roundTrip(fn)                  -- always end up where you started
 Scripts run in a sandbox: no `fs`, no `http`, no `shell`, no `require`. The raw
 `turtle` table is available as an escape hatch, but its movement functions are
 rerouted through `nav` so position tracking cannot desync.
+
+### Crafting has a failure mode worth handling
+
+A turtle crafts from its *whole* inventory, not just the 3×3 the recipe is read
+from. One item in any other slot and the game refuses the arrangement, however
+right the cells are — so a turtle can only craft while carrying nothing but the
+ingredients. That makes a cluttered inventory a normal outcome rather than an
+edge case, and `inv.craft` will not throw the operator's belongings on the floor
+to make room.
+
+It returns `ok, err, info`, and `info` is there to be branched on:
+
+```lua
+local ok, err, info = inv.craft({{"wheat", "wheat", "wheat"}})
+if not ok and info.reason == "inventory" then
+  for _, b in ipairs(info.blocking) do   -- {slot=, name=, count=}
+    -- deposit into a chest, drop it, or abort and say what is in the way
+  end
+end
+```
+
+Other reasons: `ingredients` (with `have` and `cells`), `no_table`, `recipe`,
+`pattern`. Anything writing against `inv.craft` — generated or hand-written —
+should handle `inventory` unless the request makes clear the turtle is carrying
+exactly the ingredients. Aborting with a clear report is a perfectly good
+answer; silently failing is not.
 
 ## Cost control
 
@@ -487,7 +514,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 355
+`lua5.3 test/all.lua` runs the three suites against a mock world — 364
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
