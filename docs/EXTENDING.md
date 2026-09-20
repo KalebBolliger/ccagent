@@ -151,6 +151,15 @@ Fuel is in the barrel at 118,64,-298.
 
 This re-caches the prompt once, then rides along free.
 
+## Shipping it
+
+Add the file to `manifest.txt`. That is the list `boot.lua` pulls onto a
+computer or turtle, and it is the only one — a module that is not in it works
+perfectly in the test suite and is simply absent on any machine installed over
+the wire, which surfaces in-game as a `require` failure a long way from the
+cause. `test/run_boot.lua` fails if the manifest and the repo disagree, so
+running the suite is enough to catch the omission.
+
 ## Testing
 
 `test/mock.lua` is a small voxel world with a turtle in it, plus enough of

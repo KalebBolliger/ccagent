@@ -1,0 +1,45 @@
+# manifest.txt -- every file that belongs on a CC:Tweaked computer.
+#
+# This is the list boot.lua pulls. It is the one place the deployable file
+# set is written down: install.lua no longer keeps its own copy, and
+# test/run_boot.lua fails if this list and the repo ever drift apart.
+#
+# Blank lines and "#" comments are ignored. Paths are relative to the repo
+# root and land under /ccagent/ with the same shape. Order matters only for
+# the progress display.
+#
+# Not listed, on purpose: test/ (needs no Minecraft), docs/, README.md,
+# CHANGELOG.md. jobs/ is created at runtime by install.lua.
+
+boot.lua
+install.lua
+config.lua
+
+agent/util.lua
+agent/geom.lua
+agent/state.lua
+agent/caps.lua
+agent/world.lua
+agent/nav.lua
+agent/inv.lua
+agent/block.lua
+agent/job.lua
+agent/registry.lua
+agent/contract.lua
+agent/lint.lua
+agent/lib.lua
+agent/init.lua
+
+claude/client.lua
+claude/prompt.lua
+claude/extract.lua
+claude/executor.lua
+claude/session.lua
+claude/config.lua
+
+ui/console.lua
+ui/jobs.lua
+ui/net.lua
+ui/controller.lua
+ui/worker.lua
+ui/host.lua

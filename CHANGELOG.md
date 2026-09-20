@@ -4,6 +4,47 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 `/state` or the install self-check.
 
+## Unreleased
+
+**Added**
+
+- `boot.lua`: a one-command bootstrapper, so getting this onto a turtle is
+  `wget run <raw url>/boot.lua` rather than copying twenty-nine files
+  through a disk drive. It fetches `manifest.txt`, pulls what it lists into
+  `/ccagent`, and hands off to `install.lua` for the local setup. Accepts a
+  ref, a fork, or any static mirror (`--url`), and remembers where it came
+  from in `/.ccagent/source` so later updates are just `ccagent update`.
+- It buffers every file in memory and writes only once all of them have
+  arrived. A download that dies half way through used to be the worst
+  outcome available here — a turtle running a mixed-version library, which
+  fails later, somewhere else, as a logic error rather than a fetch error.
+  Now it leaves the existing install untouched.
+- `manifest.txt`: the single list of what belongs on a CC machine.
+  `install.lua` had its own copy of that list, which is exactly the kind of
+  thing that drifts silently — the drift is only visible in-game, as a
+  missing module. `test/run_boot.lua` fails if the manifest and the repo
+  disagree in either direction.
+- `test/run_boot.lua`: 41 assertions over url resolution, the remembered
+  source, `config.lua` survival, the all-or-nothing write, and refusal of a
+  manifest path that would write outside `/ccagent`.
+
+**Fixed**
+
+- The generated `/ccagent.lua` launcher called `table.unpack`, which does
+  not exist in CC:Tweaked's Lua. Every `ccagent host <args>` and
+  `ccagent worker <args>` with arguments after the mode would have failed
+  on a real machine; only the bare forms were ever exercised. It now shims
+  `unpack` the way the rest of the codebase does.
+- `install.lua` wrote the launcher only if one was not already there, so an
+  install over an older copy kept the old launcher forever. It is generated
+  content; it is now rewritten every time.
+
+**Changed**
+
+- `install.lua` no longer downloads anything itself. Given a base url it
+  fetches `boot.lua` (if this machine has only `install.lua`) and delegates,
+  so the fetch loop and the file list each exist once.
+
 ## 1.1.1
 
 **Fixed**

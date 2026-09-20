@@ -5,7 +5,7 @@
       lua5.3 test/all.lua
 --------------------------------------------------------------------------]]
 
-local suites = { "test/run.lua", "test/run_lib.lua" }
+local suites = { "test/run.lua", "test/run_lib.lua", "test/run_boot.lua" }
 local failed = 0
 
 for _, s in ipairs(suites) do

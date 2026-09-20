@@ -78,30 +78,81 @@ knows which one is driving.
 
 ## Install
 
-Copy the tree to `/ccagent/` on the computer or turtle, then:
+On a fresh computer or turtle, in-game:
+
+```
+wget run https://raw.githubusercontent.com/KalebBolliger/ccagent/main/boot.lua
+```
+
+That is the whole install. `boot.lua` reads `manifest.txt`, pulls every file it
+lists into `/ccagent`, and hands off to `install.lua`, which makes the
+directories, asks once for an Anthropic API key (stored in `/.ccagent/key`,
+nowhere else), installs a `/ccagent.lua` launcher so `ccagent` works from any
+directory, and runs a self-check that prints what this particular machine can
+do.
+
+Nothing is written until every file has arrived, so a dropped connection leaves
+an existing install alone rather than half-replaced. A `config.lua` you have
+edited is kept, not overwritten.
+
+Afterwards, from anywhere:
+
+```
+ccagent update
+```
+
+re-pulls from wherever this copy came from — remembered in `/.ccagent/source`.
+
+### Installing from somewhere else
+
+`wget run` takes no arguments of its own, so to install anything but the
+default, save the bootstrapper and then run it:
+
+```
+wget https://raw.githubusercontent.com/KalebBolliger/ccagent/main/boot.lua
+boot v1.1.1
+```
+
+| | |
+|---|---|
+| `boot v1.1.1` | a tag, branch or commit instead of `main` |
+| `boot yourname/ccagent` | a fork |
+| `boot --repo yourname/ccagent --ref dev` | both |
+| `boot --ref feature/thing` | a branch whose name has a `/` in it |
+| `boot --url https://pi.local/ccagent` | any static mirror of the tree |
+| `boot --force` | replace `config.lua` with the shipped one too |
+| `boot --startup worker` | write a `startup.lua` as well |
+
+A bare argument is read as a url if it looks like one, a repo if it looks like
+`owner/name`, and otherwise a ref — hence `--ref` for branch names containing a
+slash. `--startup worker` makes the turtle rejoin its host after a chunk
+reload; `host` and `solo` do the same for the other two modes.
+
+`boot.lua` always defaults to `main`, whichever ref you fetched *it* from — it
+has no way to see its own url. Name the ref if you want a particular one; it
+prints the base it settled on before it fetches anything.
+
+After the first install the copy under `/ccagent` is the one to use
+(`ccagent/boot ...`), and `ccagent update` re-runs it against the remembered
+source.
+
+### Without HTTP, or on a world that blocks GitHub
+
+Copy the tree to `/ccagent/` by hand — a disk drive and a floppy will do — then:
 
 ```
 ccagent/install
 ```
 
-It makes the directories, asks once for an Anthropic API key (stored in
-`/.ccagent/key`, nowhere else), installs a `/ccagent.lua` launcher, and runs a
-self-check that prints what this particular machine can do.
-
-If you are serving the files over HTTP:
-
-```
-ccagent/install https://your.host/ccagent
-ccagent/install https://your.host/ccagent --startup worker
-```
-
-`--startup worker` writes a `startup.lua` so the turtle rejoins its host after
-a chunk reload.
+`ccagent/install https://your.host/ccagent` also still works: it fetches
+`boot.lua` and lets it do the pulling, so the file list only ever lives in
+`manifest.txt`.
 
 Requirements: CC:Tweaked with the HTTP API enabled (default) and
-`api.anthropic.com` reachable. A GPS constellation is optional but strongly
-recommended — without it coordinates are local to wherever the turtle booted.
-Everything else is detected at runtime.
+`api.anthropic.com` reachable — plus `raw.githubusercontent.com` if you install
+over the wire. A GPS constellation is optional but strongly recommended —
+without it coordinates are local to wherever the turtle booted. Everything else
+is detected at runtime.
 
 ## Using it
 
@@ -318,8 +369,9 @@ agent/     util geom state caps world nav inv block job
            registry contract lint lib init
 claude/    client prompt extract executor session config
 ui/        console jobs net controller worker host
-test/      mock run run_lib all    -- lua5.3 test/all.lua, outside Minecraft
+test/      mock run run_lib run_boot all   -- lua5.3 test/all.lua, no Minecraft
 jobs/      where saved/registered routines land at runtime (gitignored)
+boot.lua manifest.txt    one-command install, and the list of what it pulls
 config.lua install.lua
 CLAUDE.md              entry point for an agentic coding session
 docs/ARCHITECTURE.md   core internals, invariants, and known unknowns
@@ -327,11 +379,11 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs both suites against a mock world — 195 assertions
-covering facing math, pathfinding, replanning, inventory matching, the sandbox,
-fence extraction, manifest generation, contract parsing and gating, lint
-accuracy, distributed cycle detection, nested state isolation, and abort
-survival. Run it before shipping a change; it catches the class of bug that is
+`lua5.3 test/all.lua` runs the three suites against a mock world — 236
+assertions covering facing math, pathfinding, replanning, inventory matching,
+the sandbox, fence extraction, manifest generation, contract parsing and
+gating, lint accuracy, distributed cycle detection, nested state isolation,
+abort survival, and the bootstrapper. Run it before shipping a change; it catches the class of bug that is
 miserable to debug in-game.
 
 ## Where this is going

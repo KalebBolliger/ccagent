@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-195 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+236 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. Every bug this project has
 actually shipped was the kind this catches — facing math, path replanning,
 sandbox leaks, nesting hazards. If you touched `agent/` or `claude/`, run it
@@ -43,7 +43,8 @@ does — nothing here currently relies on anything past 5.1.
 | `agent/` | the capability library: nav, block, inv, world, job, caps, registry, contract, lint, lib |
 | `claude/` | the LLM layer: API client, prompt assembly, code extraction, sandboxed executor, session/repair loop |
 | `ui/` | the two front ends (`controller` standalone, `host`+`worker` fleet) and their shared bits |
-| `test/` | `mock.lua` (fake CC:Tweaked world) + `run.lua`/`run_lib.lua`/`all.lua` |
+| `test/` | `mock.lua` (fake CC:Tweaked world) + `run.lua`/`run_lib.lua`/`run_boot.lua`/`all.lua` |
+| `boot.lua`, `manifest.txt` | the bootstrapper and the one list of what ships to a CC machine |
 | `jobs/` | where saved/registered operator routines land at runtime (`.gitignore`d; see its `.gitkeep`) |
 
 ## Read before you touch it
@@ -73,6 +74,10 @@ does — nothing here currently relies on anything past 5.1.
   rule. The `frame` mistake in 1.1.0 was a plausible-sounding rule that
   nobody — including the test suite written to cover it — checked against
   a real example.
+- A new file under `agent/`, `claude/` or `ui/` has to be added to
+  `manifest.txt` as well, or turtles installed over the wire will not get
+  it. `test/run_boot.lua` catches this; `lua5.3 test/all.lua` is the only
+  thing standing between that mistake and a confusing in-game failure.
 - Keep `registry.add` (and the contract-header equivalent for saved
   routines) as the *only* way a capability becomes visible to the model.
   Anything added ad hoc outside that path won't appear in the manifest and
