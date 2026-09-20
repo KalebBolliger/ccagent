@@ -25,36 +25,65 @@ executor.outputLimit = 4000   -- chars of captured output kept for repair
 
 --------------------------------------------------------------- sandbox ----
 
+-- Anything that can change the inventory must bust the inventory cache.
+local MUTATES_INVENTORY = {}
+for _, name in ipairs({ "select", "drop", "dropUp", "dropDown", "suck",
+                        "suckUp", "suckDown", "transferTo", "refuel",
+                        "craft", "equipLeft", "equipRight", "place",
+                        "placeUp", "placeDown", "dig", "digUp", "digDown" }) do
+  MUTATES_INVENTORY[name] = true
+end
+
+-- Equipping changes what the machine *is*, not just what it holds.
+local MUTATES_CAPABILITIES = { equipLeft = true, equipRight = true }
+
 --- Movement through the raw turtle API would desync nav's position
 --- tracking, so the `turtle` table the script sees has its movement
 --- functions rerouted. Everything else passes through untouched.
+---
+--- Resolved live, through __index, rather than copied once: the turtle API
+--- is not a fixed set. turtle.craft does not exist until a crafting table
+--- is equipped, so a script that equips one and then crafts -- the whole
+--- point of carrying a crafting table -- would find turtle.craft missing
+--- from a snapshot taken before it equipped.
 local function wrapTurtle(env)
   if not _G.turtle then return nil end
   local nav = require("agent.nav")
   local inv = require("agent.inv")
-  local t = {}
-  for k, v in pairs(turtle) do t[k] = v end
-  t.forward   = function() return nav.forward() end
-  t.back      = function() return nav.back() end
-  t.up        = function() return nav.up() end
-  t.down      = function() return nav.down() end
-  t.turnLeft  = function() return nav.turnLeft() end
-  t.turnRight = function() return nav.turnRight() end
-  -- Anything that can change the inventory must bust the cache.
-  for _, name in ipairs({ "select", "drop", "dropUp", "dropDown", "suck",
-                          "suckUp", "suckDown", "transferTo", "refuel",
-                          "craft", "equipLeft", "equipRight", "place",
-                          "placeUp", "placeDown", "dig", "digUp", "digDown" }) do
-    local orig = turtle[name]
-    if orig then
-      t[name] = function(...)
-        local a, b = orig(...)
+  local caps = require("agent.caps")
+
+  local rerouted = {
+    forward   = function() return nav.forward() end,
+    back      = function() return nav.back() end,
+    up        = function() return nav.up() end,
+    down      = function() return nav.down() end,
+    turnLeft  = function() return nav.turnLeft() end,
+    turnRight = function() return nav.turnRight() end,
+  }
+
+  local wrapped = {}   -- name -> { orig = <fn seen>, fn = <wrapper> }
+
+  return setmetatable({}, {
+    __index = function(_, key)
+      local route = rerouted[key]
+      if route then return route end
+
+      local fn = turtle[key]
+      if type(fn) ~= "function" or not MUTATES_INVENTORY[key] then return fn end
+
+      -- Re-wrap if the underlying function changed (or appeared).
+      local seen = wrapped[key]
+      if seen and seen.orig == fn then return seen.fn end
+      local wrapper = function(...)
+        local a, b = fn(...)
         inv.invalidate()
+        if MUTATES_CAPABILITIES[key] then caps.refresh() end
         return a, b
       end
-    end
-  end
-  return t
+      wrapped[key] = { orig = fn, fn = wrapper }
+      return wrapper
+    end,
+  })
 end
 
 local SAFE_OS = { "time", "clock", "day", "epoch", "sleep", "startTimer",

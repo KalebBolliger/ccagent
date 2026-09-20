@@ -235,6 +235,7 @@ registry.add("caps", caps, "what this machine can actually do", {
   { fn = "has",     sig = "(name) -> bool",                 doc = "turtle, digging, crafting, equip, gps, modem, wirelessModem, unlimitedFuel" },
   { fn = "get",     sig = "(name) -> value" },
   { fn = "require", sig = "(name, why?)",                   doc = "hard guard; errors with a readable message" },
+  { fn = "refresh", sig = "() -> flags",                    doc = "re-probe after equipping: equipping a crafting table adds crafting" },
 })
 
 registry.add("helper", helper, "cross-cutting odds and ends", {

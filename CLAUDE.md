@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-287 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+300 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. Every bug this project has
 actually shipped was the kind this catches — facing math, path replanning,
 sandbox leaks, nesting hazards. If you touched `agent/` or `claude/`, run it

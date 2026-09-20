@@ -119,6 +119,28 @@ function turtle.place()     return place("forward") end
 function turtle.placeUp()   return place("up") end
 function turtle.placeDown() return place("down") end
 
+-- Equipping is the one operation that changes what the turtle *is*.
+-- CC only gives a turtle `craft` once a crafting table is on a side, so
+-- the mock adds and removes the method the same way.
+local function equip(side)
+  local slot = T.slots[T.sel]
+  if not slot then return false, "Nothing to equip" end
+  if slot.name == "minecraft:crafting_table" then
+    T.slots[T.sel] = nil
+    T.equipped = T.equipped or {}
+    T.equipped[side] = "minecraft:crafting_table"
+    turtle.craft = function(limit)
+      mock.crafted = (mock.crafted or 0) + (limit or 1)
+      return true
+    end
+    return true
+  end
+  return false, "Not a tool"
+end
+
+function turtle.equipLeft()  return equip("left") end
+function turtle.equipRight() return equip("right") end
+
 function turtle.attack()     return false, "Nothing to attack here" end
 function turtle.attackUp()   return false, "Nothing to attack here" end
 function turtle.attackDown() return false, "Nothing to attack here" end
@@ -298,7 +320,10 @@ function mock.reset()
   T.x, T.y, T.z, T.f = 0, 64, 0, 0
   T.fuel, T.sel, T.hasTool = 20000, 1, true
   T.slots = {}
+  T.equipped = nil
+  turtle.craft = nil
   mock.dropped = 0
+  mock.crafted = 0
 end
 
 return mock

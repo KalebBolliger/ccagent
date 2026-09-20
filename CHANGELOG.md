@@ -51,6 +51,32 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **Equipping a crafting table did not make the turtle able to craft.**
+  A turtle carrying a crafting table, asked to bake bread, equipped the
+  table — correctly — and then reported "crafting capability unavailable
+  even when equipped". Two independent staleness bugs, either of which
+  was enough on its own:
+  - `agent/caps.lua` probes once and caches. Nothing invalidated that
+    cache on equip, so `caps.has("crafting")` kept returning the answer
+    from boot. `caps.detect`'s own comment said to force a re-probe
+    "after the turtle equips a different tool"; nothing ever did. There is
+    now `caps.refresh()`, the sandbox calls it after `equipLeft`/
+    `equipRight`, and `caps.require` re-probes once before refusing —
+    a script that just equipped the tool it needs is right and the cache
+    is wrong.
+  - `claude/executor.lua` built the script's `turtle` table by copying
+    `pairs(turtle)` once. `turtle.craft` does not exist until a crafting
+    table is equipped, so it was absent from that copy and stayed absent
+    however successfully the script equipped one — and the loop that
+    wraps inventory-mutating calls skipped `craft` for the same reason.
+    The table is now resolved live through `__index`, wrapping mutators
+    as they appear.
+- Capability-gated entries had the same shape of bug one level up.
+  `registry.environment` replaced an unavailable function with an error
+  stub, discarding the real one — from the live module table, so the
+  function was gone for the whole session, for every caller, even after
+  the capability appeared. The stub now keeps the real function and
+  re-checks before refusing.
 - A mistyped API key said nothing until the first request came back 401,
   which on a 39-column screen is a long way from the typing that caused
   it. `install.lua` now reports the length it stored and says so when the

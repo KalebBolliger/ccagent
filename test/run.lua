@@ -446,5 +446,99 @@ do
 end
 
 --------------------------------------------------------------------------
+group("equipping changes what the turtle is")
+
+-- The real failure this covers: a turtle carrying a crafting table is
+-- asked to make bread. The program equips the table -- which is what the
+-- table is for -- and then cannot craft, because capabilities were probed
+-- once at boot and the sandbox's view of the turtle API was copied once
+-- at program start. Both were stale by the time they mattered.
+
+--- The turtle table a generated program actually sees.
+local function sandboxTurtle()
+  return executor.sandbox(agent.env()).turtle
+end
+
+local function withCraftingTable()
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:crafting_table", count = 1 }
+  turtle.select(1)
+  caps.detect(true)
+end
+
+withCraftingTable()
+ok(not caps.has("crafting"), "a bare turtle cannot craft")
+
+local sbt = sandboxTurtle()
+ok(sbt.craft == nil, "and the sandbox shows no craft function")
+
+ok(sbt.equipLeft(), "the script equips the crafting table")
+
+ok(caps.has("crafting"), "capabilities notice, without being asked twice")
+ok(type(sbt.craft) == "function",
+   "and the sandbox now has craft, from the table it was already handed")
+
+sbt.craft(1)
+ok(mock.crafted == 1, "which actually crafts", mock.crafted)
+
+-- caps.require is the guard generated code is told to use. It must not
+-- refuse on a stale answer either.
+withCraftingTable()
+local sbt2 = sandboxTurtle()
+sbt2.equipRight()
+ok(pcall(caps.require, "crafting"), "caps.require re-probes before refusing")
+
+-- A mutator that did not exist when the sandbox was built still has to
+-- bust the inventory cache when it appears.
+withCraftingTable()
+local sbt3 = sandboxTurtle()
+sbt3.equipLeft()
+inv.slots()                      -- warm the cache
+mock.turtle.slots[5] = { name = "minecraft:bread", count = 3 }
+sbt3.craft(1)
+ok(inv.count("minecraft:bread") == 3,
+   "a newly appeared mutator still invalidates the inventory cache",
+   inv.count("minecraft:bread"))
+
+-- Movement must still be rerouted through nav, proxy or not.
+withCraftingTable()
+local before = nav.pos()
+sandboxTurtle().forward()
+ok(nav.pos().z == before.z - 1, "movement still goes through nav", nav.pos().z)
+
+-- The same staleness, one level up: a capability-gated entry is stubbed
+-- when the env is built. Equipping the missing hardware has to un-stub it,
+-- and building the env must not cost the module its real function.
+fresh()
+do
+  local realFn = inv.listExternal
+  local env = agent.env()
+  ok(type(inv.listExternal) == "function",
+     "gating leaves a callable behind, not a hole")
+
+  local blocked = select(2, pcall(env.inv.listExternal))
+  ok(tostring(blocked):find("modem", 1, true) ~= nil,
+     "without a modem it refuses, by name", blocked)
+
+  -- Equip one: caps.refresh is what a script would call after equipping.
+  local realPeripheral = _G.peripheral
+  _G.peripheral = { getNames = function() return { "left" } end,
+                    getType = function() return "modem" end,
+                    find = function(t) return t == "modem" and {} or nil end }
+  caps.refresh()
+  local _, nowErr = pcall(env.inv.listExternal)
+  _G.peripheral = realPeripheral
+  caps.refresh()
+
+  -- It may still fail further in (this fake peripheral is not a real
+  -- chest), but it must no longer fail *because of the capability* --
+  -- the gate is what is under test.
+  ok(tostring(nowErr):find("modem", 1, true) == nil,
+     "once the modem is there the gate stops refusing", nowErr)
+  ok(inv.listExternal == realFn or type(inv.listExternal) == "function",
+     "and the real function was never thrown away")
+end
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

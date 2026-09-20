@@ -130,9 +130,21 @@ function caps.has(name)
   return v ~= nil and v ~= false and v ~= 0
 end
 
+--- Re-probe. The machine is not static: equipping a crafting table adds
+--- turtle.craft, equipping a modem adds a peripheral, and a boot-time
+--- answer outlives none of that. Cheap -- every probe is a nil check or a
+--- pcall -- so call it whenever the turtle's hardware may have changed.
+function caps.refresh()
+  return caps.detect(true)
+end
+
 --- Guard for scripts: `caps.require("digging")` errors with a clear message
 --- instead of letting the job fail halfway through in a confusing way.
 function caps.require(name, why)
+  if caps.has(name) then return true end
+  -- Before refusing, check we are not holding a stale answer: a script
+  -- that just equipped the tool it needs is right and we are wrong.
+  caps.refresh()
   if caps.has(name) then return true end
   error(("this turtle lacks '%s'%s"):format(name, why and (" -- " .. why) or ""), 2)
 end

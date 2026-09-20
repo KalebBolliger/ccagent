@@ -77,6 +77,14 @@ end
 --- are replaced by a stub that raises a clear error, so a script that tries
 --- anyway fails with "this turtle has no crafting upgrade" rather than
 --- "attempt to call a nil value".
+---
+--- The stub keeps the real function and re-checks before refusing: a
+--- capability can appear mid-program (equipping a modem, or a crafting
+--- table) and the script that just equipped it is right where this table
+--- is stale. Without holding `real`, replacing the entry here would also
+--- destroy the function for the rest of the session -- these are the live
+--- module tables, not copies, which is deliberate: a script is allowed to
+--- set fields like job.abortFlag through them.
 function registry.environment()
   local env = {}
   for name, ns in pairs(namespaces) do
@@ -89,7 +97,9 @@ function registry.environment()
         local missing = type(d.requires) == "table" and table.concat(d.requires, "+")
                         or tostring(d.requires)
         local fnName = d.fn
-        ns[fnName] = function()
+        local real = ns[fnName]
+        ns[fnName] = function(...)
+          if available(d) and type(real) == "function" then return real(...) end
           error(("%s.%s needs '%s', which this machine does not have")
                 :format(d.ns, fnName, missing), 2)
         end
