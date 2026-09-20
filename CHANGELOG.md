@@ -63,6 +63,30 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   clearing, the placement and the craft. The prompt says to use it and
   never `turtle.craft`.
 
+**Added**
+
+- `inv.equip(spec, side?)` and `inv.unequip(side?)`. Equipping was left to
+  generated programs, which meant every one of them re-derived the same
+  swap by hand — and got it wrong in the same way, leaving a turtle's
+  pickaxe in the inventory. `inv.craft` now equips a carried crafting
+  table itself and puts the displaced tool back, so a script asks for
+  bread and gets bread. `opts.restore = false` keeps the table on for a
+  script crafting in a loop.
+- A failed craft reports the layout it refused (`1=wheat 2=wheat 6=dirt`)
+  rather than only that it refused. A craft that fails is debuggable only
+  if you can see the grid it was looking at.
+
+**Fixed**
+
+- Item names could not be written bare. `inv.find("crafting_table")`
+  returned nothing, because matching was exact and the item is
+  `minecraft:crafting_table`. Generated code writes the short form
+  constantly — it is how people say these names — and the failure reads
+  like an empty inventory rather than a spelling difference. A pattern
+  with no namespace and no wildcard now matches any namespace, so
+  `"wheat"` finds `minecraft:wheat` and `"stone"` still does not find
+  `minecraft:cobblestone`.
+
 **Changed**
 
 - The input prompt is `cc>` rather than `>`. Both the shell and ccagent

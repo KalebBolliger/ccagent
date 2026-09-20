@@ -55,7 +55,18 @@ function util.startsWith(s, p) return s:sub(1, #p) == p end
 --- Case-insensitive glob match. "*log*" matches "minecraft:oak_log".
 function util.glob(s, pattern)
   s, pattern = s:lower(), pattern:lower()
-  if not pattern:find("[%*%?]") then return s == pattern end
+  if not pattern:find("[%*%?]") then
+    if s == pattern then return true end
+    -- A bare name is shorthand for any namespace: "wheat" means
+    -- "minecraft:wheat". Generated code writes the short form constantly
+    -- -- it is how people say these names -- and an exact-match-only rule
+    -- turns that into "no such item", which reads like an empty
+    -- inventory rather than a spelling difference.
+    if not pattern:find(":", 1, true) then
+      return s:match("^[^:]*:(.+)$") == pattern
+    end
+    return false
+  end
   local lua = pattern:gsub("[%^%$%(%)%%%.%[%]%+%-]", "%%%0")
                      :gsub("%*", ".*")
                      :gsub("%?", ".")

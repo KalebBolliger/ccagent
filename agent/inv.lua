@@ -341,6 +341,50 @@ function inv.fuelValue()
   return total
 end
 
+-------------------------------------------------------------- equipping ---
+
+--- Put an item from the inventory onto a side. Equipping swaps: whatever
+--- was on that side lands in the slot the item came from, so the returned
+--- slot is how you put things back -- select it and equip the same side
+--- again. An empty selected slot unequips, which is how the item comes
+--- home.
+---
+--- Changes what the machine can do, so capabilities are re-probed here.
+function inv.equip(spec, side)
+  if not _G.turtle then return false, "not a turtle" end
+  side = (side == "left") and "left" or "right"
+  local fn = (side == "left") and turtle.equipLeft or turtle.equipRight
+  if not fn then return false, "this turtle cannot equip" end
+
+  local slot = inv.find(spec)
+  if not slot then
+    return false, ("nothing matching %s to equip")
+      :format(type(spec) == "string" and spec or "that")
+  end
+  turtle.select(slot)
+  local ok, err = fn()
+  inv.invalidate()
+  caps.refresh()
+  if not ok then return false, err or "the turtle refused to equip it" end
+  return true, slot
+end
+
+--- Take whatever is on a side off, into the first free slot.
+function inv.unequip(side)
+  if not _G.turtle then return false, "not a turtle" end
+  side = (side == "left") and "left" or "right"
+  local fn = (side == "left") and turtle.equipLeft or turtle.equipRight
+  if not fn then return false, "this turtle cannot equip" end
+  local free = inv.firstFreeSlot()
+  if not free then return false, "no free slot to unequip into" end
+  turtle.select(free)
+  local ok, err = fn()
+  inv.invalidate()
+  caps.refresh()
+  if not ok then return false, err or "nothing to unequip" end
+  return true, free
+end
+
 ------------------------------------------------------------- crafting ----
 
 -- A turtle crafts from the left 3x3 of its 4x4 inventory. The fourth
@@ -393,6 +437,21 @@ function inv.clearGrid()
   return true
 end
 
+--- What the crafting grid holds right now, for error messages: a craft
+--- that failed is only debuggable if you can see the layout it refused.
+function inv.gridSummary()
+  local bits = {}
+  for _, slot in ipairs(inv.GRID) do
+    local d = inv.slot(slot)
+    if d then
+      bits[#bits + 1] = ("%d=%s%s"):format(slot, (d.name:gsub("^.*:", "")),
+                                           d.count > 1 and ("x" .. d.count) or "")
+    end
+  end
+  if #bits == 0 then return "an empty grid" end
+  return table.concat(bits, " ")
+end
+
 --- Lay a recipe out in the crafting grid and craft it.
 ---
 ---   inv.craft({ { "*wheat", "*wheat", "*wheat" } })          -- bread
@@ -410,19 +469,52 @@ end
 function inv.craft(pattern, opts)
   opts = opts or {}
   if not _G.turtle then return false, "not a turtle" end
+
+  -- A carried crafting table is no use in the inventory. Equip it here
+  -- rather than making every generated program hand-roll the swap, and
+  -- put the displaced tool back afterwards -- forgetting that is how a
+  -- mining turtle quietly loses its pickaxe.
+  local side = (opts.side == "left") and "left" or "right"
+  local equippedHere, displaced = false, nil
   if not turtle.craft then
-    return false, "no crafting upgrade -- equip a crafting table first"
+    if not inv.find("crafting_table") then
+      return false, "no crafting upgrade, and no crafting table carried"
+    end
+    local ok, slotOrErr = inv.equip("crafting_table", side)
+    if not ok then
+      return false, "could not equip the crafting table: " .. tostring(slotOrErr)
+    end
+    equippedHere = true
+    -- Whatever was on that side is now in the slot the table came from.
+    -- Remember the item, not the slot: laying out the recipe may move it
+    -- again, and then a slot number puts back the wrong thing or nothing.
+    local was = inv.slot(slotOrErr)
+    displaced = was and was.name or nil
+    if not turtle.craft then
+      return false, "equipped the crafting table but crafting is still unavailable"
+    end
+  end
+
+  local function finish(ok, err)
+    if equippedHere and opts.restore ~= false then
+      if displaced then
+        inv.equip(displaced, side)     -- puts the table back in its place
+      else
+        inv.unequip(side)
+      end
+    end
+    return ok, err
   end
   if type(pattern) ~= "table" or #pattern == 0 then
-    return false, "craft needs a pattern: rows of item specs"
+    return finish(false, "craft needs a pattern: rows of item specs")
   end
-  if #pattern > 3 then return false, "a recipe is at most 3 rows" end
+  if #pattern > 3 then return finish(false, "a recipe is at most 3 rows") end
 
   local target, order = {}, {}
   for row = 1, #pattern do
     local cells = pattern[row]
-    if type(cells) ~= "table" then return false, "each row must be a table" end
-    if #cells > 3 then return false, "a recipe row is at most 3 cells" end
+    if type(cells) ~= "table" then return finish(false, "each row must be a table") end
+    if #cells > 3 then return finish(false, "a recipe row is at most 3 cells") end
     for col = 1, #cells do
       if cells[col] then
         local slot = gridSlot(row, col)
@@ -431,7 +523,7 @@ function inv.craft(pattern, opts)
       end
     end
   end
-  if #order == 0 then return false, "the pattern asks for nothing" end
+  if #order == 0 then return finish(false, "the pattern asks for nothing") end
 
   local function describe(spec)
     return type(spec) == "string" and spec or "that item"
@@ -469,13 +561,13 @@ function inv.craft(pattern, opts)
       if spec and inv.matches(here, spec) then
         if here.count > 1 then
           local ok, err = stash(slot, here.count - 1)
-          if not ok then return false, err end
+          if not ok then return finish(false, err) end
         end
       else
         local ok, err = stash(slot, here.count)
-        if not ok then return false, err end
+        if not ok then return finish(false, err) end
         if inv.slot(slot) then
-          return false, ("could not clear slot %d"):format(slot)
+          return finish(false, ("could not clear slot %d"):format(slot))
         end
       end
     end
@@ -493,15 +585,15 @@ function inv.craft(pattern, opts)
         end
       end
       if not from then
-        return false, ("no %s left to put in slot %d -- the recipe needs " ..
-                       "one per cell"):format(describe(spec), slot)
+        return finish(false, ("no %s left to put in slot %d -- the recipe " ..
+                              "needs one per cell"):format(describe(spec), slot))
       end
       turtle.select(from)
       local moved = turtle.transferTo(slot, 1)
       inv.invalidate()
       if not moved then
-        return false, ("could not move %s into slot %d")
-          :format(describe(spec), slot)
+        return finish(false, ("could not move %s into slot %d")
+          :format(describe(spec), slot))
       end
     end
   end
@@ -509,10 +601,10 @@ function inv.craft(pattern, opts)
   local ok, err = turtle.craft(opts.limit)
   inv.invalidate()
   if not ok then
-    return false, (err or "no matching recipe") ..
-      " -- check the shape, one item per cell"
+    return finish(false, (err or "no matching recipe") ..
+      " -- laid out " .. inv.gridSummary())
   end
-  return true
+  return finish(true)
 end
 
 --------------------------------------------------- external inventories ---

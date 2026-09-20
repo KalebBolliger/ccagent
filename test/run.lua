@@ -606,11 +606,52 @@ ok(not okCraft, "two wheat is not bread")
 ok(tostring(why):find("one per cell", 1, true) ~= nil,
    "and the reason names the shape", why)
 
--- No crafting table at all.
+-- No crafting table anywhere: say that, rather than "no recipe".
 turtleWith({ [8] = { name = WHEAT, count = 3 } })
 okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
-ok(not okCraft and tostring(why):find("equip", 1, true) ~= nil,
-   "without the upgrade it says to equip one", why)
+ok(not okCraft and tostring(why):find("no crafting table carried", 1, true) ~= nil,
+   "with no table at all it says so", why)
+
+-- Carrying one is enough: the library equips it rather than making the
+-- script hand-roll the swap, and puts the displaced tool back after.
+turtleWith({
+  [5] = { name = "minecraft:diamond_pickaxe", count = 1 },
+  [6] = { name = "minecraft:crafting_table", count = 1 },
+  [8] = { name = WHEAT, count = 3 },
+})
+mock.turtle.equipped = { right = "minecraft:diamond_pickaxe" }
+mock.turtle.slots[5] = nil
+caps.detect(true)
+ok(not caps.has("crafting"), "starts unable to craft")
+
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "a carried crafting table is equipped automatically", why)
+ok(inv.count("minecraft:bread") == 1, "and the bread gets made",
+   inv.count("minecraft:bread"))
+ok(mock.turtle.equipped.right == "minecraft:diamond_pickaxe",
+   "and the pickaxe goes back on afterwards",
+   tostring(mock.turtle.equipped.right))
+ok(inv.count("crafting_table") == 1, "with the table back in the inventory",
+   inv.count("crafting_table"))
+
+-- opts.restore = false leaves it equipped, for a script crafting in a loop.
+turtleWith({
+  [6] = { name = "minecraft:crafting_table", count = 1 },
+  [8] = { name = WHEAT, count = 3 },
+})
+okCraft = inv.craft({ { WHEAT, WHEAT, WHEAT } }, { restore = false })
+ok(okCraft and caps.has("crafting"),
+   "restore = false keeps the table on")
+
+-- A failure has to say what the grid actually held.
+turtleWith({
+  [6] = { name = "minecraft:crafting_table", count = 1 },
+  [8] = { name = "minecraft:cobblestone", count = 3 },
+})
+okCraft, why = inv.craft({ { "cobblestone", "cobblestone", "cobblestone" } })
+ok(not okCraft, "cobblestone in a row is not a recipe")
+ok(tostring(why):find("1=cobblestone", 1, true) ~= nil,
+   "and the error shows the layout it refused", why)
 
 -- Malformed patterns are refused rather than half-executed.
 turtleWith({ [1] = { name = "minecraft:crafting_table", count = 1 } })

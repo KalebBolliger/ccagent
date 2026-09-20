@@ -122,50 +122,86 @@ function turtle.placeDown() return place("down") end
 -- Equipping is the one operation that changes what the turtle *is*.
 -- CC only gives a turtle `craft` once a crafting table is on a side, so
 -- the mock adds and removes the method the same way.
-local function equip(side)
-  local slot = T.slots[T.sel]
-  if not slot then return false, "Nothing to equip" end
-  if slot.name == "minecraft:crafting_table" then
-    T.slots[T.sel] = nil
-    T.equipped = T.equipped or {}
-    T.equipped[side] = "minecraft:crafting_table"
-    -- Craft against the real grid, so tests prove the layout rather than
-    -- trusting it: the left 3x3 (1,2,3 / 5,6,7 / 9,10,11), positional,
-    -- one item per cell. Only the recipes the tests need.
-    turtle.craft = function(limit)
-      local GRID = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
-      local cell = {}
-      for i, slot in ipairs(GRID) do
-        local s = T.slots[slot]
-        cell[i] = s and s.name or false
-        if s and s.count > 1 then
-          return false, "No matching recipes"   -- stacked is not shaped
-        end
-      end
-      local function only(...)
-        local want = { ... }                    -- grid indices that must be full
-        local set = {}
-        for _, i in ipairs(want) do set[i] = true end
-        for i = 1, 9 do
-          if set[i] and not cell[i] then return false end
-          if not set[i] and cell[i] then return false end
-        end
-        return true
-      end
-      local wheat = cell[1] == "minecraft:wheat" and cell[2] == "minecraft:wheat"
-                    and cell[3] == "minecraft:wheat"
-      if wheat and only(1, 2, 3) then
-        for _, slot in ipairs({ 1, 2, 3 }) do T.slots[slot] = nil end
-        local n = math.min(limit or 1, 1)
-        T.slots[1] = { name = "minecraft:bread", count = n }
-        mock.crafted = (mock.crafted or 0) + n
-        return true
-      end
-      return false, "No matching recipes"
+-- Craft against the real grid, so tests prove the layout rather than
+-- trusting it: the left 3x3 (1,2,3 / 5,6,7 / 9,10,11), positional, one
+-- item per cell. Only the recipes the tests need.
+function mock.craftImpl(limit)
+  local GRID = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
+  local cell = {}
+  for i, slot in ipairs(GRID) do
+    local s = T.slots[slot]
+    cell[i] = s and s.name or false
+    if s and s.count > 1 then
+      return false, "No matching recipes"       -- stacked is not shaped
+    end
+  end
+  local function only(...)
+    local set = {}
+    for _, i in ipairs({ ... }) do set[i] = true end
+    for i = 1, 9 do
+      if set[i] and not cell[i] then return false end
+      if not set[i] and cell[i] then return false end
     end
     return true
   end
-  return false, "Not a tool"
+  local wheat = cell[1] == "minecraft:wheat" and cell[2] == "minecraft:wheat"
+                and cell[3] == "minecraft:wheat"
+  if wheat and only(1, 2, 3) then
+    for _, slot in ipairs({ 1, 2, 3 }) do T.slots[slot] = nil end
+    local n = math.min(limit or 1, 1)
+    T.slots[1] = { name = "minecraft:bread", count = n }
+    mock.crafted = (mock.crafted or 0) + n
+    return true
+  end
+  return false, "No matching recipes"
+end
+
+-- Equipping swaps: what is selected goes onto the side, what was on the
+-- side comes back into that slot, so an empty selected slot unequips.
+-- turtle.craft exists only while a crafting table is actually on a side,
+-- which is the whole reason the capability cache has to be invalidated.
+local function syncCraft()
+  T.equipped = T.equipped or {}
+  if T.equipped.left == "minecraft:crafting_table"
+     or T.equipped.right == "minecraft:crafting_table" then
+    turtle.craft = mock.craftImpl
+  else
+    turtle.craft = nil
+  end
+end
+
+local function equip(side)
+  T.equipped = T.equipped or {}
+  local held = T.slots[T.sel]
+  local was = T.equipped[side]
+
+  if not held then
+    if not was then return false, "Nothing to equip" end
+    T.equipped[side] = nil
+    T.slots[T.sel] = { name = was, count = 1 }
+    syncCraft()
+    return true
+  end
+
+  if held.name ~= "minecraft:crafting_table"
+     and not held.name:find("pickaxe") and not held.name:find("modem") then
+    return false, "Not a valid upgrade"
+  end
+
+  if held.count > 1 then
+    held.count = held.count - 1
+    if was then
+      local free
+      for i = 1, 16 do if not T.slots[i] then free = i; break end end
+      if not free then return false, "No space for the displaced tool" end
+      T.slots[free] = { name = was, count = 1 }
+    end
+  else
+    T.slots[T.sel] = was and { name = was, count = 1 } or nil
+  end
+  T.equipped[side] = held.name
+  syncCraft()
+  return true
 end
 
 function turtle.equipLeft()  return equip("left") end
