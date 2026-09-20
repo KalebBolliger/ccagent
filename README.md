@@ -94,6 +94,10 @@ this particular machine can do.
 Run it as `/ccagent` — absolute. CC's shell path is `.:/rom/programs`, so the
 bare name `ccagent` only resolves when your current directory is `/`.
 
+Mistyped the key? `/ccagent/install --key` asks again. It reports the length it
+stored and warns if the value does not look like an Anthropic key, because the
+alternative is finding out at the first request.
+
 Nothing is written until every file has arrived, so a dropped connection leaves
 an existing install alone rather than half-replaced. A `config.lua` you have
 edited is kept, not overwritten.

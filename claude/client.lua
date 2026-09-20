@@ -149,7 +149,7 @@ function client.message(cfg, body)
 
       -- 400/401/403/404 will not get better by trying again.
       if status == 401 or status == 403 then
-        return nil, lastErr .. "  (check the API key in config)"
+        return nil, lastErr .. "  (key: /.ccagent/key)"
       end
       if status >= 400 and status < 500 and status ~= 429 then
         return nil, lastErr

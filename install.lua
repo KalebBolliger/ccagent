@@ -21,9 +21,10 @@
 --------------------------------------------------------------------------]]
 
 local args = { ... }
-local base, startupMode = nil, nil
+local base, startupMode, resetKey = nil, nil, false
 for i = 1, #args do
   if args[i] == "--startup" then startupMode = args[i + 1]
+  elseif args[i] == "--key" then resetKey = true
   elseif args[i]:match("^https?://") then base = args[i]:gsub("/$", "") end
 end
 
@@ -91,9 +92,9 @@ end
   say("installed /ccagent.lua launcher")
 end
 
--- API key.
+-- API key. `ccagent/install --key` re-asks when one is already stored.
 local keyPath = "/.ccagent/key"
-if not fs.exists(keyPath) then
+if resetKey or not fs.exists(keyPath) then
   say("")
   say("Anthropic API key.")
   say("console.anthropic.com")
@@ -101,11 +102,23 @@ if not fs.exists(keyPath) then
   say("Blank to skip; workers need none.")
   write("key> ")
   local key = read()
-  if key and key:gsub("%s", "") ~= "" then
+  key = key and (key:gsub("^%s+", ""):gsub("%s+$", "")) or ""
+  if key ~= "" then
     local h = fs.open(keyPath, "w")
-    h.write((key:gsub("^%s+", ""):gsub("%s+$", "")))
+    h.write(key)
     h.close()
-    say("saved")
+    -- A key mistyped into a 39-column terminal otherwise stays silent
+    -- until the first request comes back 401, long after the typing.
+    if not key:match("^sk%-ant%-") then
+      say("saved, but it does not start")
+      say("with sk-ant- . Re-run with:")
+      say("  /ccagent/install --key")
+    elseif #key < 40 then
+      say("saved, but it looks short at")
+      say(#key .. " chars -- truncated?")
+    else
+      say("saved (" .. #key .. " chars)")
+    end
   else
     say("skipped")
   end

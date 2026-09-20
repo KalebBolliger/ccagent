@@ -51,6 +51,14 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- A mistyped API key said nothing until the first request came back 401,
+  which on a 39-column screen is a long way from the typing that caused
+  it. `install.lua` now reports the length it stored and says so when the
+  value does not start with `sk-ant-` or looks truncated, and
+  `install --key` re-asks without anyone having to delete
+  `/.ccagent/key` by hand. The 401 message names that file rather than
+  saying "check the API key in config", which pointed at `config.lua` —
+  the wrong file, since the key deliberately lives outside the tree.
 - **The front ends could not load the library at all.** `ui/controller.lua`,
   `ui/worker.lua` and `ui/host.lua` each set
   `package.path = "/?.lua;/?/init.lua;"`, which resolves `agent.util` to
