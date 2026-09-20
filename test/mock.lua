@@ -134,14 +134,24 @@ function mock.craftImpl(limit)
      and on.right ~= "minecraft:crafting_table" then
     return false
   end
+  -- The rule, confirmed in game: the whole inventory is the crafting
+  -- area. Anything in a slot outside the 3x3 -- column 4, bottom row,
+  -- anywhere -- makes the arrangement unmatchable, however correct the
+  -- recipe cells are. Stacks inside the cells are fine: they craft
+  -- min(cell) times.
   local GRID = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
-  local cell = {}
+  local inGrid = {}
+  for _, slot in ipairs(GRID) do inGrid[slot] = true end
+  for slot = 1, 16 do
+    if T.slots[slot] and not inGrid[slot] then
+      return false, "No matching recipes"
+    end
+  end
+  local cell, counts = {}, {}
   for i, slot in ipairs(GRID) do
     local s = T.slots[slot]
     cell[i] = s and s.name or false
-    if s and s.count > 1 then
-      return false, "No matching recipes"       -- stacked is not shaped
-    end
+    counts[i] = s and s.count or 0
   end
   local function only(...)
     local set = {}
@@ -155,9 +165,19 @@ function mock.craftImpl(limit)
   local wheat = cell[1] == "minecraft:wheat" and cell[2] == "minecraft:wheat"
                 and cell[3] == "minecraft:wheat"
   if wheat and only(1, 2, 3) then
-    for _, slot in ipairs({ 1, 2, 3 }) do T.slots[slot] = nil end
-    local n = math.min(limit or 1, 1)
-    T.slots[1] = { name = "minecraft:bread", count = n }
+    local n = math.min(counts[1], counts[2], counts[3], limit or 64)
+    if n < 1 then return false, "No matching recipes" end
+    for _, slot in ipairs({ 1, 2, 3 }) do
+      local s = T.slots[slot]
+      s.count = s.count - n
+      if s.count <= 0 then T.slots[slot] = nil end
+    end
+    for slot = 1, 16 do
+      if not T.slots[slot] then
+        T.slots[slot] = { name = "minecraft:bread", count = n }
+        break
+      end
+    end
     mock.crafted = (mock.crafted or 0) + n
     return true
   end

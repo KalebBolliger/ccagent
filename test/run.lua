@@ -616,18 +616,21 @@ executor.sandbox(agent.env()).turtle.equipRight()
 okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
 ok(okCraft, "a single stack is spread across the cells", why)
 
--- Junk sitting in the grid is part of the recipe unless it is moved out.
+-- Anything that is not an ingredient makes the arrangement unmatchable,
+-- wherever it sits -- the whole inventory is the crafting area. Refuse
+-- and name it, rather than dropping the operator's belongings to make
+-- room or failing later with "no matching recipe".
 turtleWith({
   [1] = { name = "minecraft:crafting_table", count = 1 },
   [2] = { name = "minecraft:cobblestone", count = 7 },
   [6] = { name = "minecraft:dirt", count = 2 },
   [12] = { name = WHEAT, count = 3 },
 })
-turtle.select(1)
-executor.sandbox(agent.env()).turtle.equipLeft()
 okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
-ok(okCraft, "junk in the grid is cleared out of the way", why)
-ok(inv.count("minecraft:cobblestone") == 7, "and is not lost",
+ok(not okCraft, "a turtle carrying other things cannot craft")
+ok(tostring(why):find("cobblestone", 1, true) ~= nil,
+   "and the refusal names what is in the way", why)
+ok(inv.count("minecraft:cobblestone") == 7, "nothing was dropped to make room",
    inv.count("minecraft:cobblestone"))
 ok(inv.count("minecraft:dirt") == 2, "none of it", inv.count("minecraft:dirt"))
 
@@ -732,6 +735,38 @@ turtle.getEquippedLeft, turtle.getEquippedRight = nil, nil
 turtle.craft = mock.craftImpl
 okCraft, why = inv.craft({ { "cobblestone", "cobblestone", "cobblestone" } })
 ok(not okCraft, "a genuinely wrong shape still fails")
+
+-- Sixteen wheat and a crafting table. This failed in game: the surplus
+-- was parked in slot 4, which is outside the 3x3 but still inside the
+-- crafting area, so the game refused a layout that looked perfect.
+-- Spread it across the cells instead -- 6/5/5 -- and it is five loaves.
+turtleWith({
+  [1] = { name = WHEAT, count = 16 },
+  [2] = { name = "minecraft:crafting_table", count = 1 },
+})
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "sixteen wheat crafts instead of failing", why)
+ok(mock.crafted == 5, "five loaves, not one", mock.crafted)
+ok(inv.count("wheat") == 1, "with the odd wheat left over", inv.count("wheat"))
+
+-- opts.limit bounds it without stranding the rest outside the recipe.
+turtleWith({
+  [1] = { name = WHEAT, count = 16 },
+  [2] = { name = "minecraft:crafting_table", count = 1 },
+})
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } }, { limit = 2 })
+ok(okCraft and mock.crafted == 2, "limit caps the number of crafts", mock.crafted)
+
+-- Surplus already spread unevenly across the cells is still fine.
+turtleWith({
+  [1] = { name = WHEAT, count = 2 },
+  [2] = { name = WHEAT, count = 7 },
+  [3] = { name = WHEAT, count = 3 },
+  [5] = { name = "minecraft:crafting_table", count = 1 },
+})
+okCraft, why = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(okCraft, "ingredients already in the cells get rebalanced", why)
+ok(mock.crafted == 4, "twelve wheat is four loaves", mock.crafted)
 
 -- Malformed patterns are refused rather than half-executed.
 turtleWith({ [1] = { name = "minecraft:crafting_table", count = 1 } })

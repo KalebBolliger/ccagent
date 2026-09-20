@@ -394,48 +394,23 @@ end
 -- whether you meant it or not.
 --
 --     1  2  3 | 4
---     5  6  7 | 8      <- grid          spare ->
+--     5  6  7 | 8      <- the 3x3 a recipe is read from
 --     9 10 11 | 12
 --    13 14 15 | 16
 --
--- Recipes are positional. Three wheat stacked in one slot is not bread;
--- three wheat in three adjacent grid slots is. Nothing in a generated
--- script can be expected to know that, so it lives here.
-inv.GRID  = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
-inv.SPARE = { 4, 8, 12, 16 }
+-- The 3x3 is where the recipe goes, but the *whole* inventory is the
+-- crafting area: an item in any other slot makes the arrangement
+-- unmatchable, however right the cells are. Confirmed in game -- three
+-- wheat in 1,2,3 with the surplus in slot 4 gives "No matching recipes",
+-- and the same layout crafts the moment slot 4 is emptied. So there is
+-- no spare column and nowhere to park anything; column 4 is scratch
+-- space during setup and must be clear before crafting.
+--
+-- Recipes are positional and take stacks: three wheat in one slot is not
+-- bread, three cells of five wheat is five loaves.
+inv.GRID = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
 
 local function gridSlot(row, col) return inv.GRID[(row - 1) * 3 + col] end
-
-local function isGridSlot(n)
-  for _, s in ipairs(inv.GRID) do if s == n then return true end end
-  return false
-end
-
---- Move everything out of the crafting grid into the spare column.
---- Returns true, or false plus what would not fit.
-function inv.clearGrid()
-  if not _G.turtle then return false, "not a turtle" end
-  for _, slot in ipairs(inv.GRID) do
-    if inv.slot(slot) then
-      local moved = false
-      for _, spare in ipairs(inv.SPARE) do
-        local there = inv.slot(spare)
-        if not there or (there.name == inv.slot(slot).name) then
-          turtle.select(slot)
-          if turtle.transferTo(spare) and not inv.slot(slot) then
-            moved = true
-            break
-          end
-        end
-      end
-      if not moved then
-        return false, ("slot %d is in the crafting grid and the spare " ..
-                       "column is full"):format(slot)
-      end
-    end
-  end
-  return true
-end
 
 --- Is a crafting table actually on a side?
 ---
@@ -476,32 +451,102 @@ end
 
 --- Lay a recipe out in the crafting grid and craft it.
 ---
----   inv.craft({ { "*wheat", "*wheat", "*wheat" } })          -- bread
+---   inv.craft({ { "wheat", "wheat", "wheat" } })             -- bread
 ---   inv.craft({ { "*_planks", "*_planks" },
 ---               { "*_planks", "*_planks" } })                -- crafting table
 ---
 --- `pattern` is up to three rows of up to three cells. A cell is an item
---- spec (globs allowed) or nil for "leave empty". Cells are placed in the
---- grid exactly as written, because recipes are shaped: three wheat in one
---- slot is not bread, three wheat across three cells is.
+--- spec (globs allowed) or nil for "leave empty". Recipes are shaped, so
+--- cells are placed exactly as written.
 ---
---- opts.limit  craft at most this many times (default: as many as fit)
+--- The whole inventory is the crafting area, not just the 3x3. Anything
+--- in any other slot -- column 4, the bottom row, a tool displaced by
+--- equipping -- makes the arrangement unmatchable however right the cells
+--- are. So every ingredient is spread across the cells that want it
+--- rather than parked, and anything that is not an ingredient is a
+--- refusal with its name in it, not a silent failure later.
 ---
---- Returns true, or false plus a reason. Needs a crafting table equipped.
+--- Surplus goes into the cells too and crafts repeatedly: sixteen wheat
+--- over three cells is 6/5/5, which is five loaves.
+---
+--- opts.limit  craft at most this many times
+--- opts.side   which side to put the crafting table on
+--- opts.restore = false  leave the table equipped
+---
+--- Returns true, or false plus a reason.
 function inv.craft(pattern, opts)
   opts = opts or {}
   if not _G.turtle then return false, "not a turtle" end
+  if type(pattern) ~= "table" or #pattern == 0 then
+    return false, "craft needs a pattern: rows of item specs"
+  end
+  if #pattern > 3 then return false, "a recipe is at most 3 rows" end
 
-  -- A carried crafting table is no use in the inventory. Equip it here
-  -- rather than making every generated program hand-roll the swap, and
-  -- put the displaced tool back afterwards -- forgetting that is how a
-  -- mining turtle quietly loses its pickaxe.
-  local side = (opts.side == "left") and "left" or "right"
-  local equippedHere, displaced = false, nil
+  local function describe(spec)
+    return type(spec) == "string" and spec or "that item"
+  end
 
-  --- Put a carried crafting table on. Remembers the displaced item, not
-  --- the slot it landed in: laying out the recipe can move that item
-  --- again, and then a slot number puts back nothing.
+  ---------------------------------------------------------------- cells --
+  local target, order = {}, {}
+  local groups, groupOf = {}, {}
+  for row = 1, #pattern do
+    local cells = pattern[row]
+    if type(cells) ~= "table" then return false, "each row must be a table" end
+    if #cells > 3 then return false, "a recipe row is at most 3 cells" end
+    for col = 1, #cells do
+      local spec = cells[col]
+      if spec then
+        local slot = gridSlot(row, col)
+        target[slot], order[#order + 1] = spec, slot
+        local gi
+        for i, g in ipairs(groups) do if g.spec == spec then gi = i end end
+        if not gi then
+          groups[#groups + 1] = { spec = spec, cells = {} }
+          gi = #groups
+        end
+        local cellsOfGroup = groups[gi].cells
+        cellsOfGroup[#cellsOfGroup + 1] = slot
+        groupOf[slot] = gi
+      end
+    end
+  end
+  if #order == 0 then return false, "the pattern asks for nothing" end
+
+  --- Which group, if any, an item belongs to.
+  local function groupFor(detail)
+    for i, g in ipairs(groups) do
+      if inv.matches(detail, g.spec) then return i end
+    end
+    return nil
+  end
+
+  -- Refuse before touching anything if the turtle is carrying something
+  -- the recipe does not use: it cannot be parked, and dropping the
+  -- operator's belongings to make room is not ours to decide.
+  local strays = {}
+  for slot = 1, inv.SLOTS do
+    local d = inv.slot(slot)
+    if d and not groupFor(d) and not util.glob(d.name, "*crafting_table") then
+      strays[#strays + 1] = (d.name:gsub("^.*:", ""))
+      if #strays >= 3 then break end
+    end
+  end
+  if #strays > 0 then
+    return false, ("the whole inventory is the crafting area, so it must " ..
+                   "hold only the ingredients -- drop or deposit %s first")
+      :format(table.concat(strays, ", "))
+  end
+
+  --------------------------------------------------------------- equip ---
+  local equippedHere, displaced, side = false, nil, opts.side
+
+  if not side then          -- prefer a side that is not already carrying one
+    for _, try in ipairs({ "right", "left" }) do
+      if caps.equipped(try) == false then side = try; break end
+    end
+  end
+  side = (side == "left") and "left" or "right"
+
   local function equipTable()
     local ok, slotOrErr = inv.equip("crafting_table", side)
     if not ok then return false, tostring(slotOrErr) end
@@ -511,16 +556,13 @@ function inv.craft(pattern, opts)
     return true
   end
 
-  -- Ask whether a table is attached, not whether the method exists.
   local attached = inv.craftingTableEquipped()
   if attached == false or (attached == nil and not turtle.craft) then
     if not inv.find("crafting_table") then
       return false, "no crafting table attached, and none carried"
     end
     local ok, err = equipTable()
-    if not ok then
-      return false, "could not equip the crafting table: " .. err
-    end
+    if not ok then return false, "could not equip the crafting table: " .. err end
     if not turtle.craft then
       return false, "equipped the crafting table but crafting is still unavailable"
     end
@@ -528,114 +570,106 @@ function inv.craft(pattern, opts)
 
   local function finish(ok, err)
     if equippedHere and opts.restore ~= false then
-      if displaced then
-        inv.equip(displaced, side)     -- puts the table back in its place
-      else
-        inv.unequip(side)
-      end
+      if displaced then inv.equip(displaced, side) else inv.unequip(side) end
     end
     return ok, err
   end
-  if type(pattern) ~= "table" or #pattern == 0 then
-    return finish(false, "craft needs a pattern: rows of item specs")
-  end
-  if #pattern > 3 then return finish(false, "a recipe is at most 3 rows") end
 
-  local target, order = {}, {}
-  for row = 1, #pattern do
-    local cells = pattern[row]
-    if type(cells) ~= "table" then return finish(false, "each row must be a table") end
-    if #cells > 3 then return finish(false, "a recipe row is at most 3 cells") end
-    for col = 1, #cells do
-      if cells[col] then
-        local slot = gridSlot(row, col)
-        target[slot] = cells[col]
-        order[#order + 1] = slot
-      end
+  ------------------------------------------------------------- arrange ---
+  -- Share every ingredient out across the cells that want it. The
+  -- remainder goes to the earliest cells rather than anywhere outside,
+  -- which would break the recipe; an uneven cell just crafts fewer times.
+  local want = {}
+  for _, g in ipairs(groups) do
+    local total = 0
+    for slot = 1, inv.SLOTS do
+      local d = inv.slot(slot, needsDetail(g.spec))
+      if d and inv.matches(d, g.spec) then total = total + d.count end
     end
-  end
-  if #order == 0 then return finish(false, "the pattern asks for nothing") end
-
-  local function describe(spec)
-    return type(spec) == "string" and spec or "that item"
-  end
-
-  --- Move `count` items out of `slot` into the spare column. Only the
-  --- spare column will do: anything parked in the grid joins the recipe.
-  local function stash(slot, count)
-    local moved = 0
-    for _, spare in ipairs(inv.SPARE) do
-      if moved >= count then break end
-      local here = inv.slot(slot)
-      if not here then break end
-      local there = inv.slot(spare)
-      if spare ~= slot and (not there or there.name == here.name) then
-        turtle.select(slot)
-        if turtle.transferTo(spare, count - moved) then
-          inv.invalidate()
-          local after = inv.slot(slot)
-          moved = moved + (here.count - (after and after.count or 0))
-        end
-      end
+    local n = #g.cells
+    local per = math.floor(total / n)
+    if per < 1 then
+      return finish(false, ("only %d %s for %d cells -- the recipe needs " ..
+                            "one per cell"):format(total, describe(g.spec), n))
     end
-    if moved >= count then return true end
-    return false, ("slot %d must be emptied and the spare column " ..
-                   "(4, 8, 12, 16) is full"):format(slot)
-  end
-
-  -- Clear the grid of everything the recipe did not ask for, including
-  -- surplus in cells it did: a cell holds exactly one item.
-  for _, slot in ipairs(inv.GRID) do
-    local here = inv.slot(slot)
-    if here then
-      local spec = target[slot]
-      if spec and inv.matches(here, spec) then
-        if here.count > 1 then
-          local ok, err = stash(slot, here.count - 1)
-          if not ok then return finish(false, err) end
-        end
-      else
-        local ok, err = stash(slot, here.count)
-        if not ok then return finish(false, err) end
-        if inv.slot(slot) then
-          return finish(false, ("could not clear slot %d"):format(slot))
-        end
-      end
+    local extra = total - per * n
+    for i, slot in ipairs(g.cells) do
+      want[slot] = per + ((i <= extra) and 1 or 0)
     end
   end
 
-  -- Fill each cell from somewhere that is not itself a cell, so a source
-  -- is never a place we have already put an item.
-  for _, slot in ipairs(order) do
-    if not inv.slot(slot) then
-      local spec, from = target[slot], nil
-      for i = 1, inv.SLOTS do
-        if not target[i] then
-          local d = inv.slot(i, needsDetail(spec))
-          if d and inv.matches(d, spec) then from = i; break end
-        end
-      end
-      if not from then
-        return finish(false, ("no %s left to put in slot %d -- the recipe " ..
-                              "needs one per cell"):format(describe(spec), slot))
-      end
+  --- Move `n` items matching `spec` into `dest` from anywhere else,
+  --- taking first from slots that are not cells.
+  local function fill(dest, spec, n)
+    local function take(from)
+      if n <= 0 or from == dest then return end
+      local d = inv.slot(from, needsDetail(spec))
+      if not d or not inv.matches(d, spec) then return end
+      local spare = target[from] and (d.count - (want[from] or 0)) or d.count
+      if spare <= 0 then return end
       turtle.select(from)
-      local moved = turtle.transferTo(slot, 1)
+      turtle.transferTo(dest, math.min(n, spare))
       inv.invalidate()
-      if not moved then
-        return finish(false, ("could not move %s into slot %d")
-          :format(describe(spec), slot))
+      local now = inv.slot(dest)
+      n = want[dest] - ((now and now.count) or 0)
+    end
+    for slot = 1, inv.SLOTS do if not target[slot] then take(slot) end end
+    for slot = 1, inv.SLOTS do if target[slot] then take(slot) end end
+    return n <= 0
+  end
+
+  -- Empty any cell holding the wrong ingredient first; a slot outside the
+  -- grid is fine as scratch, it only has to be clear before we craft.
+  for _, slot in ipairs(order) do
+    local d = inv.slot(slot)
+    if d and not inv.matches(d, target[slot]) then
+      for scratch = 1, inv.SLOTS do
+        if not target[scratch] and not inv.slot(scratch) then
+          turtle.select(slot)
+          turtle.transferTo(scratch)
+          inv.invalidate()
+          break
+        end
+      end
+      if inv.slot(slot) then
+        return finish(false, ("slot %d holds the wrong ingredient and there " ..
+                              "is nowhere to put it"):format(slot))
       end
     end
   end
 
+  for _, slot in ipairs(order) do
+    local d = inv.slot(slot)
+    local have = (d and inv.matches(d, target[slot])) and d.count or 0
+    if have < want[slot] then
+      fill(slot, target[slot], want[slot] - have)
+    end
+  end
+
+  -- A crafting table still in the inventory is itself outside the recipe,
+  -- so it has to go somewhere, and the side is where it belongs. This is
+  -- also the retry for builds that cannot say what is attached: if we
+  -- were wrong about having one on, equipping now fixes both problems.
+  if not equippedHere then
+    local carried = inv.find("crafting_table")
+    if carried and not target[carried] then equipTable() end
+  end
+
+  -- Nothing may remain outside the recipe, including a tool the equip
+  -- displaced. This is the check that the game itself applies.
+  for slot = 1, inv.SLOTS do
+    if not target[slot] and inv.slot(slot) then
+      local d = inv.slot(slot)
+      return finish(false, ("%s in slot %d is outside the recipe, and the " ..
+                            "whole inventory is the crafting area")
+        :format((d.name:gsub("^.*:", "")), slot))
+    end
+  end
+
+  --------------------------------------------------------------- craft ---
   local ok, err = turtle.craft(opts.limit)
   inv.invalidate()
 
-  -- On a build that cannot tell us what is equipped, a failure here is
-  -- ambiguous: a wrong shape, or a method that outlived its upgrade. If
-  -- we are carrying a table and have not tried it, that is cheap to rule
-  -- out -- the layout is already correct, so the retry costs one equip.
   if not ok and not equippedHere and inv.craftingTableEquipped() == nil
      and inv.find("crafting_table") then
     if equipTable() then

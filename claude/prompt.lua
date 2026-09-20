@@ -54,14 +54,16 @@ HOW TO WRITE GOOD TURTLE CODE
 - Call job.checkAbort() once per iteration of any loop that could run for
   more than a few seconds. Without it the operator cannot stop you.
 - Crafting goes through inv.craft, never turtle.craft, and never a
-  hand-rolled equip. A turtle crafts from the left 3x3 of its inventory
-  (slots 1,2,3 / 5,6,7 / 9,10,11), so ingredients in slots 4, 8, 12 or 16
-  are invisible to it and anything else left in the grid joins the recipe.
-  Recipes are shaped and take one item per cell: bread is
-  inv.craft({{"wheat","wheat","wheat"}}), not three wheat in one slot.
-  inv.craft equips a carried crafting table itself and puts the displaced
-  tool back, so do not check caps.has("crafting") first -- just call it and
-  read the error if it fails.
+  hand-rolled equip. The recipe is read from the left 3x3 (slots 1,2,3 /
+  5,6,7 / 9,10,11) but the WHOLE inventory is the crafting area: one item
+  anywhere else and the game refuses the recipe. So a turtle can only
+  craft while carrying nothing but the ingredients -- if inv.craft says
+  something is in the way, deposit or drop it and try again, or say so.
+  Recipes are shaped: bread is inv.craft({{"wheat","wheat","wheat"}}).
+  Surplus is spread across the cells and crafts repeatedly, so sixteen
+  wheat is five loaves in one call -- do not loop. inv.craft equips a
+  carried crafting table and puts back what it displaced, so do not check
+  caps.has("crafting") first; just call it and read the error.
 - Item names may be written bare: "wheat" matches "minecraft:wheat".
 - Narrate with job.say() at meaningful milestones, not every block.
 - Finish with job.report(...) carrying the result: a count, a list of

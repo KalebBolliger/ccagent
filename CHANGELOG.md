@@ -49,9 +49,28 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   `config.lua` survival, the all-or-nothing write, and refusal of a manifest
   path that would write outside `/ccagent`.
 
+**Fixed**
+
+- **A turtle crafts from its whole inventory, not from the 3x3.** Three
+  wheat laid out correctly in slots 1, 2 and 3 still gave "No matching
+  recipes" whenever a surplus stack sat in slot 4 — and crafted the
+  moment that slot was emptied. Slots 4, 8, 12 and 16 are outside the
+  3x3 the recipe is read from, which is why they looked like a safe
+  place to park surplus, but they are inside the crafting area: anything
+  there makes the arrangement unmatchable however right the cells are.
+  That assumption was invented rather than checked, and the mock agreed
+  with it because both came from the same belief. Both now model what
+  the game does. Surplus is spread across the cells instead of parked,
+  so sixteen wheat is 6/5/5 and five loaves in one call rather than a
+  failure; a turtle carrying anything that is not an ingredient is told
+  what is in the way, by name, instead of failing later; and a crafting
+  table still in the inventory is equipped, since it is outside the
+  recipe too. `inv.clearGrid` is gone — it moved things into the spare
+  column that does not exist.
+
 **Added**
 
-- `inv.craft(pattern)` and `inv.clearGrid()`. With the capability bug
+- `inv.craft(pattern)`. With the capability bug
   below fixed, the turtle equipped its crafting table and then crafted
   nothing: "No matching recipes". A turtle crafts from the left 3x3 of
   its inventory (slots 1,2,3 / 5,6,7 / 9,10,11), so wheat sitting in slot
@@ -59,8 +78,8 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   the recipe, and recipes are shaped — three wheat in one slot is not
   bread, three wheat across three cells is. None of that is derivable
   from the API surface, so no generated script should be expected to get
-  it right; `inv.craft({{"*wheat","*wheat","*wheat"}})` now does the
-  clearing, the placement and the craft. The prompt says to use it and
+  it right; `inv.craft({{"wheat","wheat","wheat"}})` now does the
+  placement and the craft. The prompt says to use it and
   never `turtle.craft`.
 
 **Added**

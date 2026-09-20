@@ -187,10 +187,9 @@ registry.add("inv", inv, "inventory as a query, not sixteen slots", {
   { fn = "deposit",  sig = "(dir, opts?) -> n",             doc = "unload everything; opts.keep = spec to retain" },
   { fn = "refuel",   sig = "(target?, opts?) -> level",     doc = "burn carried fuel up to target" },
   { fn = "craft",    sig = "(pattern, opts?) -> ok, err",
-    doc = "rows of item specs into the 3x3 grid, one item per cell; equips a carried crafting table itself" },
+    doc = "rows of item specs; the turtle must carry only the ingredients; equips a carried crafting table itself" },
   { fn = "equip",    sig = "(spec, side?) -> ok, slot", doc = "side is left|right (default right); swaps, so slot holds what came off" },
   { fn = "unequip",  sig = "(side?) -> ok, slot" },
-  { fn = "clearGrid", sig = "() -> ok, err",               doc = "empty the crafting grid into slots 4/8/12/16" },
   { fn = "listExternal", sig = "(nameOrType?) -> {name=count}, err",
     doc = "read an adjacent/networked chest without moving items", requires = "modem" },
 })
