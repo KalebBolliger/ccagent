@@ -207,6 +207,10 @@ end
 -- equipped", a different answer from "this build cannot tell you".
 function mock.equippedLeft()
   local n = (T.equipped or {}).left
+  -- A turtle that can dig has something to dig with. T.hasTool is what
+  -- the mock's dig() consults, so the sides have to agree with it, or
+  -- the capability probe and the behaviour it describes drift apart.
+  if not n and T.hasTool then n = "minecraft:diamond_pickaxe" end
   return n and { name = n, count = 1 } or nil
 end
 function mock.equippedRight()

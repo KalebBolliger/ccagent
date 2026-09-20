@@ -51,6 +51,32 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **"I cannot tell" was recorded as "no".** A turtle built a wall, was
+  handed a pickaxe, and refused to break the wall down: "this turtle
+  lacks digging capability". The digging probe declines to answer when
+  something is in front of it — finding out would mean destroying the
+  block — and returns `nil` for unknown. `caps.detect` stored that with
+  `ok and val or false`, so unknown became false, and a turtle that
+  booted facing the wall it had just built was marked unable to dig for
+  the rest of the session. `caps.summary` had a `dig?` branch for the
+  unknown case that could never fire. Unknown now survives, and digging
+  is answered from what is on the turtle's sides where the build can say
+  — which works facing a wall, because a pickaxe is a pickaxe.
+- Capabilities are re-probed at the boundaries the inventory already
+  was: before a program runs, and before the situation line is built.
+  The operator equipping a pickaxe by hand is the same class of change
+  as rearranging the inventory, and nothing here was told about either.
+  The GPS probe is exempt — it blocks for two seconds — and anything
+  else added later is refreshed by default.
+- A missing capability now names the item that would supply it:
+  "this turtle lacks 'digging' (diamond_pickaxe is in slot 3 but not
+  equipped -- inv.equip("*pickaxe"))". A tool in the inventory is not
+  equipped and fuel in the inventory is not fuel, which is exactly the
+  confusion that produced a report of "no digging capability, fuel at 0"
+  from a turtle carrying a pickaxe and a stack of coal. The prompt tells
+  generated code to check what the turtle is carrying before concluding
+  it is incapable.
+
 - **The inventory cache outlived the inventory.** Run a job, take the
   result out through the turtle's GUI, put fresh ingredients in, run the
   job again — and it reported the item you had just removed as being in

@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-370 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+383 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. Every bug this project has
 actually shipped was the kind this catches — facing math, path replanning,
 sandbox leaks, nesting hazards. If you touched `agent/` or `claude/`, run it
@@ -121,7 +121,17 @@ Nothing should come back but `noreply@anthropic.com`.
   we start trusting the world again after an arbitrary gap has to
   invalidate: `executor.run` before a program starts, `agent.situation`
   before describing the turtle to Claude. Adding a third such boundary
-  means adding a third invalidation.
+  means adding a third invalidation. The same goes for `agent/caps.lua`,
+  which re-probes everything cheap at those boundaries — a new probe is
+  refreshed by default, and one too slow to re-run (the GPS fix blocks
+  for two seconds) must say so with `{ expensive = true }`.
+- A probe that cannot tell must return `nil`, and `nil` must survive into
+  the flags table. `caps.detect` used to write `ok and val or false`,
+  which turned the digging probe's "I will not destroy the block in front
+  of me to find out" into "this turtle cannot dig" — permanently, for a
+  turtle that happened to boot facing a wall. `caps.summary` still has a
+  `dig?` branch for unknown; if it can never fire again, something has
+  re-collapsed the two answers.
 - A new file under `agent/`, `claude/` or `ui/` has to be added to
   `manifest.txt` as well, or turtles installed over the wire will not get
   it. `test/run_boot.lua` catches this; `lua5.3 test/all.lua` is the only

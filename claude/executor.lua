@@ -19,6 +19,7 @@
 local util = require("agent.util")
 local job  = require("agent.job")
 local inv  = require("agent.inv")
+local caps = require("agent.caps")
 
 local executor = {}
 
@@ -172,12 +173,13 @@ function executor.run(code, apiEnv, opts)
   opts = opts or {}
   job.reset(opts.name or "job")
 
-  -- Anything cached about the inventory is a guess by now. The operator
-  -- can open the turtle's GUI between jobs and take the bread out, and
-  -- nothing in here would hear about it -- the cache is only invalidated
-  -- by operations this library performs. A program that starts from a
-  -- remembered inventory reasons about a turtle that no longer exists.
+  -- Anything cached about this turtle is a guess by now. The operator can
+  -- open its GUI between jobs -- take the bread out, put a pickaxe on --
+  -- and nothing in here would hear about it, because only this library's
+  -- own operations invalidate. A program that starts from a remembered
+  -- turtle reasons about one that no longer exists.
   inv.invalidate()
+  caps.refreshCheap()
 
   local captured, capturedLen = {}, 0
   local prevSink = job.sink

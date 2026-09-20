@@ -613,6 +613,72 @@ ok(situation:find("bread", 1, true) == nil,
    "and does not describe what was taken out", situation)
 
 --------------------------------------------------------------------------
+group("capabilities change, and not only when we change them")
+
+-- A turtle built a wall, ran out of fuel, and was then asked to break the
+-- wall down. It refused: "this turtle lacks digging capability". It had
+-- been marked that way at boot, because the digging probe will not
+-- destroy a block to find out whether it can, and its honest "I cannot
+-- tell" was being recorded as "no".
+fresh()
+mock.set(0, 64, -1, "minecraft:cobblestone")        -- facing what it built
+caps.detect(true)
+ok(caps.get("digging") == nil or caps.get("digging") == true,
+   "facing a wall is not evidence that it cannot dig",
+   tostring(caps.get("digging")))
+ok(caps.summary():find("NO%-dig") == nil,
+   "so the turtle is not described as unable to", caps.summary())
+
+-- With the sides reporting, the answer comes from the tool, wall or no.
+fresh()
+mock.set(0, 64, -1, "minecraft:cobblestone")
+mock.turtle.hasTool = false
+mock.turtle.equipped = { left = "minecraft:diamond_pickaxe" }
+caps.detect(true)
+ok(caps.has("digging"), "a pickaxe on a side means it can dig")
+
+-- The operator equipping one by hand is the same class of change as
+-- rearranging the inventory: nothing in here is told about it.
+fresh()
+mock.turtle.hasTool = false
+caps.detect(true)
+ok(not caps.has("digging"), "starts with nothing to dig with")
+mock.turtle.equipped = { right = "minecraft:iron_pickaxe" }   -- by hand
+ok(not caps.has("digging"), "and does not notice on its own")
+
+local r = executor.run([[ job.report(caps.has("digging")) ]], agent.env(), {})
+ok(r.ok and r.result == true,
+   "but a program is told what the turtle can do now", tostring(r.result))
+
+fresh()
+mock.turtle.hasTool = false
+caps.detect(true)
+mock.turtle.equipped = { right = "minecraft:iron_pickaxe" }
+ok(agent.situation():find("dig", 1, true) ~= nil,
+   "and so is Claude", agent.situation())
+
+-- Carrying the tool is not the same as having it on, and saying "this
+-- turtle cannot dig" while a pickaxe sits in the inventory is true and
+-- useless.
+fresh()
+mock.turtle.hasTool = false
+mock.turtle.slots[3] = { name = "minecraft:diamond_pickaxe", count = 1 }
+caps.detect(true)
+local hint = caps.carriedFix("digging")
+ok(hint and hint:find("slot 3", 1, true), "the refusal can point at the pickaxe", hint)
+ok(hint and hint:find("inv.equip", 1, true), "and say what to call", hint)
+
+local okReq, err = pcall(caps.require, "digging", "to break the wall")
+ok(not okReq and tostring(err):find("slot 3", 1, true) ~= nil,
+   "caps.require carries the hint", err)
+
+fresh()
+mock.turtle.hasTool = false
+caps.detect(true)
+ok(caps.carriedFix("digging") == nil,
+   "and stays quiet when there is nothing to suggest")
+
+--------------------------------------------------------------------------
 group("crafting: the grid is not the inventory")
 
 -- The real sequence: a turtle holding wheat and a crafting table, asked
@@ -734,12 +800,11 @@ ok(not okCraft and tostring(why):find("none carried", 1, true) ~= nil,
 -- Carrying one is enough: the library equips it rather than making the
 -- script hand-roll the swap, and puts the displaced tool back after.
 turtleWith({
-  [5] = { name = "minecraft:diamond_pickaxe", count = 1 },
   [6] = { name = "minecraft:crafting_table", count = 1 },
   [8] = { name = WHEAT, count = 3 },
 })
+mock.turtle.hasTool = false                        -- left side genuinely bare
 mock.turtle.equipped = { right = "minecraft:diamond_pickaxe" }
-mock.turtle.slots[5] = nil
 caps.detect(true)
 ok(not caps.has("crafting"), "starts unable to craft")
 
@@ -748,10 +813,24 @@ ok(okCraft, "a carried crafting table is equipped automatically", why)
 ok(inv.count("minecraft:bread") == 1, "and the bread gets made",
    inv.count("minecraft:bread"))
 ok(mock.turtle.equipped.right == "minecraft:diamond_pickaxe",
-   "and the pickaxe goes back on afterwards",
+   "the pickaxe is not disturbed -- the free side is used",
    tostring(mock.turtle.equipped.right))
 ok(inv.count("crafting_table") == 1, "with the table back in the inventory",
    inv.count("crafting_table"))
+
+-- Both sides carrying upgrades: equipping the table displaces one into
+-- the inventory, which is itself outside the recipe. Say so.
+turtleWith({
+  [6] = { name = "minecraft:crafting_table", count = 1 },
+  [8] = { name = WHEAT, count = 3 },
+})
+mock.turtle.equipped = { left = "minecraft:diamond_pickaxe",
+                         right = "minecraft:wireless_modem" }
+caps.detect(true)
+okCraft, why, info = inv.craft({ { WHEAT, WHEAT, WHEAT } })
+ok(not okCraft, "with both sides full there is nowhere for the table to go")
+ok(info and info.reason == "inventory",
+   "and it reads as something in the way", info and info.reason)
 
 -- opts.restore = false leaves it equipped, for a script crafting in a loop.
 turtleWith({

@@ -73,6 +73,13 @@ HOW TO WRITE GOOD TURTLE CODE
   is a fine answer when the request does not say. The other reasons are
   "ingredients", "no_table", "recipe" and "pattern".
 - Item names may be written bare: "wheat" matches "minecraft:wheat".
+- A tool in the inventory is not equipped, and fuel in the inventory is
+  not fuel. If caps.has("digging") is false, inv.equip("*pickaxe") makes
+  it true when one is carried -- caps.carriedFix("digging") says so in
+  words. If the turtle is short of fuel, inv.refuel(n) burns what it
+  carries; getFuelLevel does not rise until something is burned. Do both
+  rather than reporting that the turtle cannot: check what it is carrying
+  before concluding it is incapable.
 - Narrate with job.say() at meaningful milestones, not every block.
 - Finish with job.report(...) carrying the result: a count, a list of
   positions, a summary table. The operator sees it and it becomes context

@@ -121,6 +121,7 @@ function agent.situation()
   -- it has to be read fresh: the operator may have loaded or emptied the
   -- turtle by hand since the last one.
   inv.invalidate()
+  caps.refreshCheap()
   local bits = {
     "caps: " .. caps.summary(),
   }
@@ -244,6 +245,7 @@ registry.add("caps", caps, "what this machine can actually do", {
   { fn = "get",     sig = "(name) -> value" },
   { fn = "require", sig = "(name, why?)",                   doc = "hard guard; errors with a readable message" },
   { fn = "refresh", sig = "() -> flags",                    doc = "re-probe after equipping: equipping a crafting table adds crafting" },
+  { fn = "carriedFix", sig = "(name) -> hint|nil",          doc = "'a pickaxe is in slot 3 but not equipped' when that is why a capability is missing" },
 })
 
 registry.add("helper", helper, "cross-cutting odds and ends", {
