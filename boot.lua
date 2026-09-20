@@ -1,38 +1,44 @@
 --[[ /ccagent/boot.lua ---------------------------------------------------
   One command to put ccagent on a CC:Tweaked computer or turtle.
 
-  On a bare machine, in-game:
+  There is no source url baked into this file. Where the library comes from
+  is configuration, because it differs per deployment: a public repo, a
+  private one behind a token, a fork, a file server on the same LAN. On a
+  bare machine boot.lua asks; after that it remembers, in /.ccagent/source.
 
-      wget run https://raw.githubusercontent.com/KalebBolliger/ccagent/main/boot.lua
+      wget run <your-url>/boot.lua      -- asks where to pull from, then pulls
+      ccagent update                    -- re-pulls from the remembered source
 
-  That is the whole bootstrap. It fetches manifest.txt, pulls every file
-  the manifest lists into /ccagent, then hands off to install.lua for the
-  local half of the job (directories, API key, launcher, self-check).
+  A source is a url template. It must contain {path}; {repo} and {ref} are
+  filled in from --repo/--ref (or the stored values) if you use them:
 
-  Afterwards the same thing is one word, from anywhere:
+      https://files.mylan:8080/ccagent/{path}
+      https://raw.<forge>/{repo}/{ref}/{path}
+      https://<api-host>/repos/{repo}/contents/{path}?ref={ref}
 
-      ccagent update
-
-  because the source it came from is remembered in /.ccagent/source.
+  A url with no {path} in it is treated as a directory to append to, so
+  `--url https://files.mylan:8080/ccagent` means the same as the first one.
 
   Options, any order, all optional:
 
-      --repo owner/name        default KalebBolliger/ccagent
-      --ref  branch|tag|sha    default main
-      --url  https://host/dir  any static mirror of the tree; wins over repo/ref
+      --url <template>         where to pull from; stored for next time
+      --repo owner/name        fills {repo}
+      --ref  branch|tag|sha    fills {ref}          (default: main)
+      --header "Name: value"   sent with every request; repeatable, stored
+      --token <secret>         adds an Authorization: Bearer header, kept in
+                               /.ccagent/token, never written to the source
+                               file and never printed
       --startup worker|host|solo   also write a /startup.lua (see install.lua)
       --force                  replace config.lua too, instead of keeping yours
       --no-setup               download only; do not run install.lua
+      --no-prompt              fail rather than ask (for startup scripts)
 
   A bare argument is read as a url if it looks like one, a repo if it looks
-  like owner/name, otherwise a ref -- so `boot v1.1.1` works. A branch whose
-  name contains a slash needs the explicit --ref.
+  like owner/name, otherwise a ref -- so `boot v1.1.1` works against a
+  stored url template. A branch whose name contains a slash needs --ref.
 
   Arguments are for the saved-file form (`wget <url> boot.lua`, then
-  `boot <args>`): `wget run` is not guaranteed to forward them. And note
-  that this file always defaults to main no matter which ref you fetched it
-  from -- it cannot see its own url -- so pass the ref if you want a
-  particular one. It prints the base it settled on before fetching anything.
+  `boot <args>`): `wget run` is not guaranteed to forward them.
 
   Nothing is written until every file has been fetched, so a mid-way network
   failure leaves the existing install alone rather than half-replaced.
@@ -41,33 +47,38 @@
   address it by absolute path.
 --------------------------------------------------------------------------]]
 
-local DIR          = "/ccagent"
-local SOURCE       = "/.ccagent/source"
-local MANIFEST     = "manifest.txt"
-local DEFAULT_REPO = "KalebBolliger/ccagent"
-local DEFAULT_REF  = "main"
+local DIR         = "/ccagent"
+local CONF        = "/.ccagent/source"
+local TOKEN_FILE  = "/.ccagent/token"
+local MANIFEST    = "manifest.txt"
+local DEFAULT_REF = "main"
 
 local unpack = table.unpack or unpack
 
 local USAGE = [[
-ccagent bootstrap
+ccagent bootstrap -- pulls the library onto this machine.
 
-  boot                       re-pull from the remembered source
-  boot <ref>                 a branch, tag or commit of the default repo
-  boot --repo owner/name [--ref r]
-  boot --url https://host/ccagent
+  boot                          use the stored source, or ask for one
+  boot --url <template>         a url containing {path}, or a directory
+  boot --repo owner/name --ref r    fill {repo} and {ref} in the template
+  boot <ref>                    just change the ref
+  boot --token <secret>         for a source that needs Authorization
+  boot --header "Name: value"   any other header, repeatable
 
-  --startup worker|host|solo   write /startup.lua as well
-  --force                      overwrite config.lua too
-  --no-setup                   download only
+  --startup worker|host|solo    write /startup.lua as well
+  --force                       overwrite config.lua too
+  --no-setup                    download only
+  --no-prompt                   never ask; fail instead
+
+The source is remembered in /.ccagent/source and any token in
+/.ccagent/token. Both are plain text on this computer.
 ]]
 
 ------------------------------------------------------------------ args ---
 
 local args = { ... }
-local repo, ref, url, startup
-local force, setup = false, true
-local given = false
+local cli = { headers = {} }
+local force, setup, mayPrompt = false, true, true
 
 local i = 1
 local function nextArg(what)
@@ -78,42 +89,168 @@ end
 
 while i <= #args do
   local a = args[i]
-  if a == "--repo" then repo = nextArg("--repo"); given = true
-  elseif a == "--ref" then ref = nextArg("--ref"); given = true
-  elseif a == "--url" then url = nextArg("--url"); given = true
-  elseif a == "--startup" then startup = nextArg("--startup")
+  if a == "--url" then cli.url = nextArg("--url")
+  elseif a == "--repo" then cli.repo = nextArg("--repo")
+  elseif a == "--ref" then cli.ref = nextArg("--ref")
+  elseif a == "--token" then cli.token = nextArg("--token")
+  elseif a == "--header" then
+    local raw = nextArg("--header")
+    local k, v = raw:match("^%s*([%w%-]+)%s*:%s*(.-)%s*$")
+    if not k then error('--header wants "Name: value", got: ' .. raw, 0) end
+    cli.headers[k] = v
+  elseif a == "--startup" then cli.startup = nextArg("--startup")
   elseif a == "--force" then force = true
   elseif a == "--no-setup" then setup = false
+  elseif a == "--no-prompt" then mayPrompt = false
   elseif a == "-h" or a == "--help" then print(USAGE); return
-  elseif a:match("^https?://") then url = a; given = true
-  elseif a:match("^[%w][%w%._%-]*/[%w][%w%._%-]*$") then repo = a; given = true
+  elseif a:match("^https?://") then cli.url = a
+  elseif a:match("^[%w][%w%._%-]*/[%w][%w%._%-]*$") then cli.repo = a
   elseif a:sub(1, 1) == "-" then error("unknown option " .. a, 0)
-  else ref = a; given = true
+  else cli.ref = a
   end
   i = i + 1
 end
 
 ---------------------------------------------------------------- source ---
+-- /.ccagent/source is key=value, "#" comments, one header per "header.Name"
+-- line. It is written after a successful pull and is yours to edit.
 
---- The base url of the last successful pull, if there was one.
-local function remembered()
-  if not fs.exists(SOURCE) then return nil end
-  local h = fs.open(SOURCE, "r")
-  if not h then return nil end
-  local text = h.readAll()
+local function readConf()
+  local conf = { headers = {} }
+  if not fs.exists(CONF) then return conf end
+  local h = fs.open(CONF, "r")
+  if not h then return conf end
+  local text = h.readAll() or ""
   h.close()
-  return text and text:match("url=([^\r\n]+)")
+  for line in text:gmatch("[^\r\n]+") do
+    if line:match("^%s*[^#]") then
+      local k, v = line:match("^%s*([%w%.%-_]+)%s*=%s*(.-)%s*$")
+      if k and v ~= "" then
+        local name = k:match("^header%.(.+)$")
+        if name then conf.headers[name] = v else conf[k] = v end
+      end
+    end
+  end
+  return conf
 end
 
-local base
-if url then
-  base = url:gsub("/+$", "")
-elseif not given then
-  base = remembered()
+local function writeConf(conf)
+  if not fs.exists("/.ccagent") then fs.makeDir("/.ccagent") end
+  local h = fs.open(CONF, "w")
+  if not h then return end
+  h.write("# where ccagent came from, and where `ccagent update` goes back to.\n")
+  h.write("# edit freely: url may contain {path}, {repo} and {ref}.\n")
+  h.write("url=" .. conf.url .. "\n")
+  if conf.repo then h.write("repo=" .. conf.repo .. "\n") end
+  if conf.ref then h.write("ref=" .. conf.ref .. "\n") end
+  local names = {}
+  for name in pairs(conf.headers) do names[#names + 1] = name end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    h.write(("header.%s=%s\n"):format(name, conf.headers[name]))
+  end
+  h.write("# a token, if any, lives in " .. TOKEN_FILE .. " -- not here.\n")
+  h.close()
 end
-if not base then
-  base = ("https://raw.githubusercontent.com/%s/%s")
-    :format(repo or DEFAULT_REPO, ref or DEFAULT_REF)
+
+local function readToken()
+  if not fs.exists(TOKEN_FILE) then return nil end
+  local h = fs.open(TOKEN_FILE, "r")
+  if not h then return nil end
+  local text = h.readAll() or ""
+  h.close()
+  local token = text:gsub("%s+$", ""):gsub("^%s+", "")
+  return token ~= "" and token or nil
+end
+
+local function writeToken(token)
+  if not fs.exists("/.ccagent") then fs.makeDir("/.ccagent") end
+  local h = fs.open(TOKEN_FILE, "w")
+  if not h then return end
+  h.write(token .. "\n")
+  h.close()
+end
+
+--- Ask, once, on a machine that has never been told where to pull from.
+local function askForSource()
+  print("ccagent does not know where to pull from yet.")
+  print("")
+  print("Give a url. Use {path} where the file path goes, or just name the")
+  print("directory the tree sits in and {path} is appended:")
+  print("")
+  print("  https://files.mylan:8080/ccagent")
+  print("  https://raw.<forge-host>/OWNER/REPO/main/{path}")
+  print("  https://<api-host>/repos/OWNER/REPO/contents/{path}?ref=main")
+  print("")
+  write("url> ")
+  local url = read()
+  url = url and (url:gsub("^%s+", ""):gsub("%s+$", "")) or ""
+  if url == "" then error("no url given; nothing to pull from", 0) end
+  print("")
+  print("Access token, if this source needs one. Stored in " .. TOKEN_FILE)
+  print("as plain text on this computer. Blank for none.")
+  write("token> ")
+  local token = read("*")
+  token = token and (token:gsub("%s+", "")) or ""
+  return url, token ~= "" and token or nil
+end
+
+local conf = readConf()
+
+local url   = cli.url or conf.url
+local token = cli.token or readToken()
+
+if not url then
+  if not mayPrompt or not read then
+    error("no source configured. Pass --url <template>, or put one in " ..
+          CONF .. ".\n\n" .. USAGE, 0)
+  end
+  local asked
+  url, asked = askForSource()
+  if asked then cli.token, token = asked, asked end
+end
+
+if cli.token then writeToken(cli.token) end
+
+local repo = cli.repo or conf.repo
+local ref  = cli.ref or conf.ref or DEFAULT_REF
+
+-- A url that does not say where the path goes is a directory to append to.
+local template = url
+if not template:find("{path}", 1, true) then
+  template = template:gsub("/+$", "") .. "/{path}"
+end
+
+-- Two sets: what the operator configured (persisted) and what actually goes
+-- out (adds the token). The token lives in its own file and must never end
+-- up in the source file, which is meant to be readable and copyable.
+local stored = {}
+for name, value in pairs(conf.headers) do stored[name] = value end
+for name, value in pairs(cli.headers) do stored[name] = value end
+
+local headers = {}
+for name, value in pairs(stored) do headers[name] = value end
+if token then
+  headers.Authorization = headers.Authorization or ("Bearer " .. token)
+  -- A forge that serves file contents as JSON metadata needs telling
+  -- otherwise, or every file arrives base64-wrapped. Harmless to a plain
+  -- file server, and overridable with --header "Accept: ...".
+  headers.Accept = headers.Accept or "application/vnd.github.raw, */*"
+end
+
+local function urlFor(path)
+  local vars = { path = path, repo = repo, ref = ref }
+  local missing
+  local out = template:gsub("{(%w+)}", function(key)
+    local v = vars[key]
+    if v == nil or v == "" then missing = missing or key end
+    return v or ""
+  end)
+  if missing then
+    error(("the url wants {%s} and nothing supplies it -- pass --%s")
+      :format(missing, missing), 0)
+  end
+  return out
 end
 
 ----------------------------------------------------------------- fetch ---
@@ -124,18 +261,25 @@ if not http then
 end
 
 local function fetch(path)
-  local u = base .. "/" .. path
-  local res, err = http.get(u)
+  local u = urlFor(path)
+  local res, err = http.get(u, next(headers) and headers or nil)
   if not res then return nil, (err or "no response") .. "  <- " .. u end
   local code = res.getResponseCode and res.getResponseCode() or 200
   local data = res.readAll()
   res.close()
   if code >= 400 then return nil, ("HTTP %d  <- %s"):format(code, u) end
   if not data or data == "" then return nil, "empty file  <- " .. u end
+  -- Some forges answer a file request with JSON metadata carrying base64
+  -- content. Writing that to disk would produce a tree that installs
+  -- cleanly and fails later as a syntax error, so say what happened.
+  if data:find('^%s*{') and data:find('"encoding"%s*:%s*"base64"') then
+    return nil, "the source returned JSON metadata, not file contents.\n" ..
+      'add --header "Accept: <the raw content type your forge wants>"  <- ' .. u
+  end
   return data
 end
 
---- A path is only allowed to name something under DIR, not climb out of it.
+--- A path may only name something under DIR, never climb out of it.
 local function safePath(p)
   return p:match("^[%w][%w%._%-/]*$") ~= nil and not p:find("%.%.", 1, true)
 end
@@ -150,17 +294,17 @@ local function parseManifest(text)
       list[#list + 1] = p
     end
   end
-  if #list == 0 then error("manifest is empty: " .. base .. "/" .. MANIFEST, 0) end
+  if #list == 0 then error("manifest is empty: " .. urlFor(MANIFEST), 0) end
   return list
 end
 
 print("ccagent bootstrap")
-print("  from " .. base)
+print("  from " .. urlFor("{path}") .. (token and "  (with a token)" or ""))
 
 local text, err = fetch(MANIFEST)
 if not text then
   error("could not read the manifest.\n" .. err ..
-        "\ncheck the ref exists, and that this world allows http.", 0)
+        "\ncheck the url, the ref, any token, and that this world allows http.", 0)
 end
 local list = parseManifest(text)
 
@@ -196,13 +340,7 @@ for _, path in ipairs(list) do
   end
 end
 
-if not fs.exists("/.ccagent") then fs.makeDir("/.ccagent") end
-local h = fs.open(SOURCE, "w")
-if h then
-  h.write("# written by ccagent/boot.lua; `ccagent update` re-reads this\n")
-  h.write("url=" .. base .. "\n")
-  h.close()
-end
+writeConf({ url = url, repo = repo, ref = ref, headers = stored })
 
 print(("  %d file%s written%s")
   :format(wrote, wrote == 1 and "" or "s",
@@ -219,5 +357,5 @@ end
 
 print("")
 local rest = {}
-if startup then rest[#rest + 1] = "--startup"; rest[#rest + 1] = startup end
+if cli.startup then rest[#rest + 1] = "--startup"; rest[#rest + 1] = cli.startup end
 shell.run(DIR .. "/install.lua", unpack(rest))

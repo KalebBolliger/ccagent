@@ -78,81 +78,126 @@ knows which one is driving.
 
 ## Install
 
-On a fresh computer or turtle, in-game:
+Put `boot.lua` on the machine and run it. It is the only file you have to move
+by hand, and where it fetches the rest from is up to you — nothing is baked in:
 
 ```
-wget run https://raw.githubusercontent.com/KalebBolliger/ccagent/main/boot.lua
+wget run <wherever-you-keep-this>/boot.lua
 ```
 
-That is the whole install. `boot.lua` reads `manifest.txt`, pulls every file it
-lists into `/ccagent`, and hands off to `install.lua`, which makes the
-directories, asks once for an Anthropic API key (stored in `/.ccagent/key`,
-nowhere else), installs a `/ccagent.lua` launcher so `ccagent` works from any
-directory, and runs a self-check that prints what this particular machine can
-do.
+It asks where to pull from (once), pulls every file `manifest.txt` lists into
+`/ccagent`, and hands off to `install.lua`, which makes the directories, asks
+once for an Anthropic API key (stored in `/.ccagent/key`, nowhere else),
+installs a `/ccagent.lua` launcher so `ccagent` works from any directory, and
+runs a self-check that prints what this particular machine can do.
 
 Nothing is written until every file has arrived, so a dropped connection leaves
 an existing install alone rather than half-replaced. A `config.lua` you have
 edited is kept, not overwritten.
 
-Afterwards, from anywhere:
+The answer is remembered in `/.ccagent/source`, so from then on, anywhere:
 
 ```
 ccagent update
 ```
 
-re-pulls from wherever this copy came from — remembered in `/.ccagent/source`.
+### Where it pulls from
 
-### Installing from somewhere else
-
-`wget run` takes no arguments of its own, so to install anything but the
-default, save the bootstrapper and then run it:
+A source is a url template containing `{path}`. `{repo}` and `{ref}` are
+filled in from `--repo` / `--ref` if you use them. A url with no `{path}` is
+treated as a directory and `/{path}` is appended:
 
 ```
-wget https://raw.githubusercontent.com/KalebBolliger/ccagent/main/boot.lua
-boot v1.1.1
+https://files.mylan:8080/ccagent
+https://raw.<forge-host>/OWNER/REPO/main/{path}
+https://<api-host>/repos/OWNER/REPO/contents/{path}?ref={ref}
 ```
 
 | | |
 |---|---|
-| `boot v1.1.1` | a tag, branch or commit instead of `main` |
-| `boot yourname/ccagent` | a fork |
-| `boot --repo yourname/ccagent --ref dev` | both |
-| `boot --ref feature/thing` | a branch whose name has a `/` in it |
-| `boot --url https://pi.local/ccagent` | any static mirror of the tree |
+| `boot --url <template>` | set (and remember) the source |
+| `boot v1.1.1` | change only the ref |
+| `boot --repo you/ccagent --ref dev` | fill the template's placeholders |
+| `boot --token <secret>` | send `Authorization: Bearer …` |
+| `boot --header "Name: value"` | any other header; repeatable, remembered |
 | `boot --force` | replace `config.lua` with the shipped one too |
 | `boot --startup worker` | write a `startup.lua` as well |
+| `boot --no-prompt` | fail instead of asking; for startup scripts |
 
-A bare argument is read as a url if it looks like one, a repo if it looks like
-`owner/name`, and otherwise a ref — hence `--ref` for branch names containing a
-slash. `--startup worker` makes the turtle rejoin its host after a chunk
-reload; `host` and `solo` do the same for the other two modes.
+`--startup worker` makes the turtle rejoin its host after a chunk reload;
+`host` and `solo` do the same for the other two modes. `--ref` defaults to
+`main`. A bare argument is read as a url if it looks like one, a repo if it
+looks like `owner/name`, and otherwise a ref — so a branch name containing a
+slash needs the explicit `--ref`.
 
-`boot.lua` always defaults to `main`, whichever ref you fetched *it* from — it
-has no way to see its own url. Name the ref if you want a particular one; it
-prints the base it settled on before it fetches anything.
+`wget run` is not guaranteed to forward arguments, so for anything but a bare
+run, save the file first and then run it:
 
-After the first install the copy under `/ccagent` is the one to use
-(`ccagent/boot ...`), and `ccagent update` re-runs it against the remembered
-source.
+```
+wget <wherever-you-keep-this>/boot.lua
+boot --url https://files.mylan:8080/ccagent
+```
 
-### Without HTTP, or on a world that blocks GitHub
+`/.ccagent/source` is plain `key=value` text and yours to edit:
 
-Copy the tree to `/ccagent/` by hand — a disk drive and a floppy will do — then:
+```
+url=https://files.mylan:8080/ccagent/{path}
+repo=you/ccagent
+ref=main
+header.X-Deploy-Key=whatever
+```
+
+Seed it from a floppy and a whole fleet installs without being asked anything.
+
+### Pulling from a private repository
+
+`--token <secret>` sends `Authorization: Bearer <secret>` with every request,
+and stores the token in `/.ccagent/token` — not in `/.ccagent/source`, so the
+source file stays safe to copy between turtles. When a token is present
+`boot.lua` also asks for raw content rather than metadata, since a forge that
+answers a file request with base64 JSON would otherwise install a tree that
+fails later as a syntax error. (If it ever does, `boot.lua` says so instead of
+writing it.) Override with `--header "Accept: …"`.
+
+For GitHub specifically, the contents API serves private files to a
+fine-grained token with read access to that one repository:
+
+```
+wget <wherever-you-keep-this>/boot.lua
+boot --url "https://api.github.com/repos/{repo}/contents/{path}?ref={ref}" \
+     --repo you/ccagent --token github_pat_...
+```
+
+Two things to weigh before doing that. The token sits in plain text on the
+in-game computer, readable by anyone who can reach that computer's files or
+the world save — so scope it to one repository, read-only, with an expiry. And
+the server's CC:Tweaked config has to allow the host you point at.
+
+If you would rather no token existed in Minecraft at all, mirror the repo to a
+file server the game can reach and point `--url` at that instead. The private
+repo then never touches the turtle, and the mirror is the only thing you have
+to keep in sync. Note that CC:Tweaked's default HTTP rules **block private IP
+ranges**, so a mirror on your LAN needs an explicit allow rule in the server's
+config before any turtle can reach it.
+
+### Without HTTP at all
+
+Copy the tree to `/ccagent/` by hand — a disk drive and a floppy will do, or
+drop the files straight into the world save — then:
 
 ```
 ccagent/install
 ```
 
-`ccagent/install https://your.host/ccagent` also still works: it fetches
+`ccagent/install <base-url>` also still works for a plain directory: it fetches
 `boot.lua` and lets it do the pulling, so the file list only ever lives in
 `manifest.txt`.
 
-Requirements: CC:Tweaked with the HTTP API enabled (default) and
-`api.anthropic.com` reachable — plus `raw.githubusercontent.com` if you install
-over the wire. A GPS constellation is optional but strongly recommended —
-without it coordinates are local to wherever the turtle booted. Everything else
-is detected at runtime.
+Requirements: CC:Tweaked with the HTTP API enabled (default), `api.anthropic.com`
+reachable, and whatever host you pull from allowed by the server's HTTP rules.
+A GPS constellation is optional but strongly recommended — without it
+coordinates are local to wherever the turtle booted. Everything else is
+detected at runtime.
 
 ## Using it
 
@@ -379,7 +424,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 236
+`lua5.3 test/all.lua` runs the three suites against a mock world — 261
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

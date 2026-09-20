@@ -9,24 +9,39 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 **Added**
 
 - `boot.lua`: a one-command bootstrapper, so getting this onto a turtle is
-  `wget run <raw url>/boot.lua` rather than copying twenty-nine files
-  through a disk drive. It fetches `manifest.txt`, pulls what it lists into
-  `/ccagent`, and hands off to `install.lua` for the local setup. Accepts a
-  ref, a fork, or any static mirror (`--url`), and remembers where it came
-  from in `/.ccagent/source` so later updates are just `ccagent update`.
-- It buffers every file in memory and writes only once all of them have
-  arrived. A download that dies half way through used to be the worst
-  outcome available here — a turtle running a mixed-version library, which
-  fails later, somewhere else, as a logic error rather than a fetch error.
-  Now it leaves the existing install untouched.
+  one file and a url rather than copying twenty-nine files through a disk
+  drive. It fetches `manifest.txt`, pulls what it lists into `/ccagent`, and
+  hands off to `install.lua` for the local setup.
+- Where it pulls from is configuration, never code. There is no repo, host
+  or url anywhere in `boot.lua` — a deployment is a public forge, a private
+  one behind a token, a fork, or a file server on the LAN, and picking one
+  of those as "the" default only makes the other three second-class. On a
+  machine that has not been told, it asks; the answer is remembered in
+  `/.ccagent/source`, so later updates are `ccagent update`. A test fails if
+  a url-valued constant reappears, and another fails if it ever guesses
+  instead of asking.
+- The source is a url template: `{path}` is required, `{repo}` and `{ref}`
+  are filled from `--repo`/`--ref`. A url without `{path}` is treated as a
+  directory to append to. `--header "Name: value"` is repeatable and
+  remembered; `--token` sends a bearer header and keeps the secret in
+  `/.ccagent/token`, deliberately not in `/.ccagent/source`, which is meant
+  to stay safe to copy between turtles.
+- A forge that answers a file request with base64 JSON metadata used to be
+  the worst available outcome: a tree that installs cleanly and fails much
+  later as a syntax error in a file nobody edited. That response is now
+  detected and refused, naming the `Accept` header that fixes it.
+- Every file is buffered before anything is written, so a download that
+  dies half way leaves the existing install untouched rather than a turtle
+  running a mixed-version library.
 - `manifest.txt`: the single list of what belongs on a CC machine.
-  `install.lua` had its own copy of that list, which is exactly the kind of
-  thing that drifts silently — the drift is only visible in-game, as a
-  missing module. `test/run_boot.lua` fails if the manifest and the repo
-  disagree in either direction.
-- `test/run_boot.lua`: 41 assertions over url resolution, the remembered
-  source, `config.lua` survival, the all-or-nothing write, and refusal of a
-  manifest path that would write outside `/ccagent`.
+  `install.lua` had its own copy, which is exactly the kind of thing that
+  drifts silently — the drift is only visible in-game, as a missing module.
+  `test/run_boot.lua` fails if the manifest and the repo disagree in either
+  direction.
+- `test/run_boot.lua`: 66 assertions over source resolution, templates,
+  headers and tokens, the remembered source, `config.lua` survival, the
+  all-or-nothing write, and refusal of a manifest path that would write
+  outside `/ccagent`.
 
 **Fixed**
 
@@ -43,7 +58,8 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 - `install.lua` no longer downloads anything itself. Given a base url it
   fetches `boot.lua` (if this machine has only `install.lua`) and delegates,
-  so the fetch loop and the file list each exist once.
+  so the fetch loop, the file list and the source configuration each exist
+  once.
 
 ## 1.1.1
 

@@ -9,12 +9,15 @@
   a /ccagent shim on the path so you can type `ccagent` from anywhere, and
   run a self-check that tells you what this machine can and cannot do.
 
-  Downloading is boot.lua's job -- it owns manifest.txt and the fetch loop,
-  so the file list is written down once rather than twice. Given a base url
-  this script fetches boot.lua if it has to, then delegates. On a bare
-  machine you would normally start from boot.lua instead:
+  Downloading is boot.lua's job -- it owns manifest.txt, the fetch loop and
+  the source configuration, so none of that is written down twice. Given a
+  base url this script fetches boot.lua if it has to, then delegates. On a
+  bare machine you would normally start from boot.lua instead:
 
-      wget run https://raw.githubusercontent.com/KalebBolliger/ccagent/main/boot.lua
+      wget run <wherever-you-keep-it>/boot.lua
+
+  <base-url> here is a plain directory holding the tree. A source that
+  needs a token or a url template is boot.lua's business; run it directly.
 --------------------------------------------------------------------------]]
 
 local args = { ... }
