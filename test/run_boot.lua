@@ -94,6 +94,43 @@ ok(not manifestSet["test/run.lua"] and not manifestSet["README.md"],
    "the manifest stays out of tests and docs")
 
 --------------------------------------------------------------------------
+group("the front ends can find the library")
+
+-- The tree installs at /ccagent, so every entry point has to put /ccagent
+-- on package.path before it requires anything. CC also searches the
+-- running program's own directory, which is why install.lua (at
+-- /ccagent/install.lua) can get this wrong and still work, while ui/*.lua
+-- (one level deeper) cannot. Resolution is simulated here rather than
+-- pattern-matched: substitute the module into each path entry and see
+-- whether the file it names actually exists in this repo.
+local INSTALL_DIR = "/ccagent"
+
+local function resolves(file, modname)
+  local src = slurp(file)
+  if not src then return false, "no such file" end
+  local paths = src:match('package%.path%s*=%s*"([^"]*)"')
+  if not paths then return false, "no package.path assignment" end
+  local rel = modname:gsub("%.", "/")
+  for entry in (paths .. ";"):gmatch("([^;]+);") do
+    local candidate = entry:gsub("%?", rel)
+    local inside = candidate:match("^" .. INSTALL_DIR .. "/(.+)$")
+    if inside and slurp(inside) then return true end
+  end
+  return false, paths
+end
+
+for _, entry in ipairs({ "ui/controller.lua", "ui/worker.lua", "ui/host.lua",
+                         "install.lua" }) do
+  local found, detail = resolves(entry, "agent.util")
+  ok(found, entry .. " finds agent.util under " .. INSTALL_DIR, detail)
+end
+
+for _, entry in ipairs({ "ui/controller.lua", "ui/host.lua" }) do
+  local found, detail = resolves(entry, "claude.session")
+  ok(found, entry .. " finds claude.session too", detail)
+end
+
+--------------------------------------------------------------------------
 group("the generated launcher")
 
 -- install.lua writes /ccagent.lua as a literal. It runs under CC's Lua, so

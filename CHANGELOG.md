@@ -51,6 +51,19 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **The front ends could not load the library at all.** `ui/controller.lua`,
+  `ui/worker.lua` and `ui/host.lua` each set
+  `package.path = "/?.lua;/?/init.lua;"`, which resolves `agent.util` to
+  `/agent/util.lua` — the tree at the filesystem root, not at `/ccagent`
+  where it installs. Running `/ccagent` died on the first `require`.
+  `install.lua` had the same wrong prefix and survived it by accident,
+  because CC also searches the running program's own directory and
+  `install.lua` sits in `/ccagent` itself; the `ui/` files are one level
+  deeper, so that fallback lands on `/ccagent/ui/agent/util.lua` and
+  misses. Every entry point now names `/ccagent` explicitly.
+  `test/run_boot.lua` simulates module resolution against the real repo
+  layout rather than matching strings, so it fails if any entry point
+  stops being able to find what it requires.
 - `install.lua` printed its key prompt and self-check at up to 66 columns
   onto the same 39-column screen, so the capability report a first-time
   operator most wants to read was the part that scrolled away. Now at most

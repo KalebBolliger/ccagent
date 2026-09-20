@@ -1,7 +1,7 @@
 --[[ ui/host.lua --------------------------------------------------------
   The fleet front-end. Runs on a stationary computer that holds the API key.
 
-      ccagent/ui/host
+      /ccagent host
 
   Workers announce themselves; you address one (or all of them) and the host
   does the thinking, then ships the resulting program out over rednet.
@@ -16,7 +16,11 @@
       > dig a 2x2 shaft down to y=-50
 --------------------------------------------------------------------------]]
 
-package.path = "/?.lua;/?/init.lua;" .. (package.path or "")
+-- The tree lives at /ccagent (agent/lib.lua and claude/config.lua say so
+-- too). CC also searches the running program's own directory, which is
+-- why a wrong prefix here still works from /ccagent/install.lua and
+-- fails from /ccagent/ui/ one level down.
+package.path = "/ccagent/?.lua;/ccagent/?/init.lua;" .. (package.path or "")
 
 local util     = require("agent.util")
 local agent    = require("agent.init")
