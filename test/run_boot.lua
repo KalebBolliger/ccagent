@@ -343,6 +343,17 @@ local function fits(text, label)
   ok(count <= 13, label .. " stays inside 13 rows", count)
 end
 
+-- install.lua cannot be run here (it needs the whole agent stack and a
+-- real terminal), so its literals are measured in the source instead.
+-- Weaker than measuring output -- a line built from a runtime value can
+-- still overflow -- but it is what let a 66-column line ship.
+local widestSay, worstSay = 0, ""
+for literal in (slurp("install.lua") or ""):gmatch('say%("([^"]*)"') do
+  if #literal > widestSay then widestSay, worstSay = #literal, literal end
+end
+ok(widestSay <= 39, "install.lua's lines stay inside 39 columns",
+   widestSay .. ": " .. worstSay)
+
 r = runBoot({}, { [HOST] = tree() }, nil, { HOST })
 ok(r.ok, "the asking path still works", r.err)
 fits((r.log:match("^(.-)from> ")), "the source prompt")

@@ -63,9 +63,11 @@ for _, d in ipairs({ "/ccagent", "/ccagent/jobs", "/.ccagent" }) do
   if not fs.exists(d) then fs.makeDir(d) end
 end
 
--- A shim so `ccagent` works from any directory. Generated, not yours to
--- edit: rewritten on every install so an old launcher cannot outlive the
--- modes it knows about.
+-- The launcher. Run it as /ccagent (absolute) from anywhere, or as
+-- `ccagent` from / -- the shell's path is ".:/rom/programs", so a program
+-- at the root is only found when the root is the current directory.
+-- Generated, not yours to edit: rewritten on every install so an old
+-- launcher cannot outlive the modes it knows about.
 do
   local h = fs.open("/ccagent.lua", "w")
   h.write([[
@@ -93,9 +95,10 @@ end
 local keyPath = "/.ccagent/key"
 if not fs.exists(keyPath) then
   say("")
-  say("Anthropic API key (from console.anthropic.com).")
-  say("Stored in " .. keyPath .. " only. Leave blank to skip (worker-only machines")
-  say("do not need one).")
+  say("Anthropic API key.")
+  say("console.anthropic.com")
+  say("Kept in " .. keyPath .. " only.")
+  say("Blank to skip; workers need none.")
   write("key> ")
   local key = read()
   if key and key:gsub("%s", "") ~= "" then
@@ -121,8 +124,9 @@ package.path = "/?.lua;/?/init.lua;" .. (package.path or "")
 local ok, agent = pcall(require, "agent.init")
 if not ok then
   say("")
-  say("self-check FAILED: " .. tostring(agent))
-  say("are all the files under /ccagent/ ?")
+  say("self-check FAILED:")
+  say(tostring(agent))
+  say("are all files under /ccagent ?")
   return
 end
 
@@ -130,23 +134,27 @@ agent.boot({ calibrate = false })
 local registry = require("agent.registry")
 local tokens = registry.manifestCost()
 
+-- Everything below is read on a turtle: 39 columns, 13 rows, no
+-- scrollback. Absolute paths, because /ccagent.lua is only on the shell's
+-- search path when the current directory happens to be / -- "ccagent" on
+-- its own resolves from there and nowhere else.
 say("")
 say("ccagent " .. agent.VERSION .. " ready")
-say("  capabilities : " .. agent.caps.summary())
-say("  api manifest : ~" .. tokens .. " tokens (cached after the first call)")
-say("  http         : " .. (http and "available" or "DISABLED in this world"))
+say("caps : " .. agent.caps.summary())
+say("api  : ~" .. tokens .. " tokens cached")
+say("http : " .. (http and "ok" or "DISABLED"))
 say("")
 if agent.caps.has("turtle") then
-  say("  run  ccagent          -- standalone (needs a key on this turtle)")
-  say("  run  ccagent worker   -- join a host over rednet (no key needed)")
+  say("/ccagent         standalone")
+  say("/ccagent worker  join a host")
 else
-  say("  run  ccagent host     -- drive turtles over rednet from here")
+  say("/ccagent host    drive turtles")
 end
 if fs.exists("/.ccagent/source") then
-  say("  run  ccagent update   -- re-pull the library from where it came from")
+  say("/ccagent update  re-pull")
 end
 if not agent.caps.has("gps") then
   say("")
-  say("  note: no GPS fix. Coordinates will be local to wherever the turtle")
-  say("        booted. A GPS constellation makes them match the world's.")
+  say("no GPS: positions are local to")
+  say("where this machine booted.")
 end

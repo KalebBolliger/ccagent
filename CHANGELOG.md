@@ -51,6 +51,17 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- `install.lua` printed its key prompt and self-check at up to 66 columns
+  onto the same 39-column screen, so the capability report a first-time
+  operator most wants to read was the part that scrolled away. Now at most
+  33, and short enough to fit in 13 rows.
+- The launcher was documented, in `install.lua` and in `README.md`, as
+  making `ccagent` work "from any directory". It does not: CC's shell path
+  is `.:/rom/programs`, so `/ccagent.lua` resolves by bare name only when
+  the current directory is `/`. From anywhere else it is "No such
+  program", which is what a first install actually produced. Everything
+  now says `/ccagent`, which works from anywhere, and the reason is
+  written down next to the launcher rather than left to be rediscovered.
 - The first-run prompt did not fit a turtle. It printed about twenty lines
   once wrapped, onto a 39x13 screen with no scrollback, so the explanation
   scrolled away and left an unexplained `from>`. Found on the first real

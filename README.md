@@ -52,7 +52,7 @@ stopping — none of which the model has to get right, or can get wrong.
 **Standalone.** One turtle, its own key, its own conversation.
 
 ```
-ccagent
+/ccagent
 ```
 
 **Host and fleet.** A stationary computer holds the key and the conversations;
@@ -61,8 +61,8 @@ one key to rotate, and a separate conversation per turtle so "now do the same
 thing one chunk east" lands on the right one.
 
 ```
-(on the computer)  ccagent host
-(on each turtle)   ccagent worker
+(on the computer)  /ccagent host
+(on each turtle)   /ccagent worker
 ```
 
 ```
@@ -88,17 +88,21 @@ wget run <wherever-you-keep-this>/boot.lua
 It asks where to pull from (once), pulls every file `manifest.txt` lists into
 `/ccagent`, and hands off to `install.lua`, which makes the directories, asks
 once for an Anthropic API key (stored in `/.ccagent/key`, nowhere else),
-installs a `/ccagent.lua` launcher so `ccagent` works from any directory, and
-runs a self-check that prints what this particular machine can do.
+installs a `/ccagent.lua` launcher, and runs a self-check that prints what
+this particular machine can do.
+
+Run it as `/ccagent` — absolute. CC's shell path is `.:/rom/programs`, so the
+bare name `ccagent` only resolves when your current directory is `/`.
 
 Nothing is written until every file has arrived, so a dropped connection leaves
 an existing install alone rather than half-replaced. A `config.lua` you have
 edited is kept, not overwritten.
 
-The answer is remembered in `/.ccagent/source`, so from then on, anywhere:
+The answer is remembered in `/.ccagent/source`, so from then on, from any
+directory:
 
 ```
-ccagent update
+/ccagent update
 ```
 
 ### Where it pulls from
@@ -118,7 +122,7 @@ https://<api-host>/repos/OWNER/REPO/contents/{path}?ref={ref}
 
 | | |
 |---|---|
-| `boot --from /disk/ccagent` | install from a floppy, or any local directory |
+| `/ccagent/boot --from /disk/ccagent` | install from a floppy, or any local directory |
 | `boot --url <template>` | set (and remember) the source |
 | `boot v1.1.1` | change only the ref |
 | `boot --repo you/ccagent --ref dev` | fill the template's placeholders |
@@ -166,7 +170,7 @@ with the `id` command in-game — and run the installer:
 <save>/computercraft/computer/<id>/ccagent/     <- the tree goes here
 ```
 ```
-ccagent/install
+/ccagent/install
 ```
 
 For more than one, use a floppy, which is the same idea but reusable. Put the
@@ -182,7 +186,7 @@ tree in a disk's folder, then put that disk in a drive next to each turtle:
 That runs `boot.lua` straight off the floppy: it reads `manifest.txt` from the
 disk, writes `/ccagent`, keeps any `config.lua` already on the turtle, and
 hands off to `install.lua` as usual. The disk is remembered as the source, so
-updating a turtle later is `ccagent update` with the floppy in the drive —
+updating a turtle later is `/ccagent update` with the floppy in the drive —
 refresh the files on the disk once and every machine can re-pull from it.
 
 No http is involved at any point, so this works in a world with the HTTP API
@@ -236,10 +240,10 @@ the two above are where current builds put them.
 Use the floppy route above, or copy the tree to `/ccagent/` by hand and run:
 
 ```
-ccagent/install
+/ccagent/install
 ```
 
-`ccagent/install <base-url>` also still works for a plain directory url: it
+`/ccagent/install <base-url>` also still works for a plain directory url: it
 fetches `boot.lua` and lets it do the pulling, so the file list only ever lives
 in `manifest.txt`.
 
@@ -475,7 +479,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 280
+`lua5.3 test/all.lua` runs the three suites against a mock world — 281
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
