@@ -102,6 +102,14 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Changed**
 
+- A command typed without its slash no longer goes to Claude as a
+  request. `save makeBread` instead of `/save makeBread` cost an API call
+  *and* overwrote the working program it was meant to keep — the two
+  failures compound, which is what makes it worth catching. Both front
+  ends now ask first. The check only fires on at most two words, so
+  "run a quarry down to y=12" is still a request: a false positive costs
+  one keystroke, and asking about every sentence would be worse than the
+  mistake it prevents.
 - The input prompt is `cc>` rather than `>`. Both the shell and ccagent
   prompted identically, which made a screenshot — or a glance — ambiguous
   about which one was waiting, and the two take different things: one

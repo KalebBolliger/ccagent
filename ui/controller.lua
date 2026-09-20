@@ -95,6 +95,13 @@ local HELP = {
   "/exit",
 }
 
+-- The command words, taken from HELP so the two cannot drift apart.
+local COMMAND_WORDS = {}
+for _, entry in ipairs(HELP) do
+  local name = entry:match("^/(%a[%w_]*)")
+  if name then COMMAND_WORDS[name] = true end
+end
+
 --- Slash commands. Returns true if the input was handled.
 local function command(input, ctx)
   local cmd, rest = input:match("^/(%S+)%s*(.*)$")
@@ -318,7 +325,16 @@ function M.run(argv)
     input = util.trim(input)
     if input ~= "" then
       history[#history + 1] = input
-      if not command(input, ctx) then
+      local slipped = console.forgottenSlash(input, COMMAND_WORDS)
+      if slipped then
+        console.warn(("'%s' is a command: /%s"):format(slipped, slipped))
+        local yn = console.ask("ask Claude instead? [y/N] ")
+        if not tostring(yn or ""):lower():match("^y") then
+          input = ""                      -- typed the slash off; do nothing
+        end
+      end
+      if input == "" then                 -- nothing to do this round
+      elseif not command(input, ctx) then
         -- A leading + asks for a routine rather than a one-off. This has to
         -- be decided before generation: writing for reuse changes the whole
         -- program, not just its header.

@@ -75,6 +75,27 @@ function console.promptFor(target)
   return console.PROMPT
 end
 
+--- Does this input look like a slash command someone forgot the slash on?
+--- `names` is the set of command words. Returns the word, or nil.
+---
+--- The cost is lopsided: a false positive is one keystroke, a false
+--- negative is an API call plus whatever the answer overwrites -- typing
+--- "save makeBread" instead of "/save makeBread" spends money and
+--- replaces the very program you were trying to keep.
+function console.forgottenSlash(input, names)
+  local first = input:match("^(%a[%w_]*)")
+  if not first then return nil end
+  first = first:lower()
+  if not names[first] then return nil end
+  -- Commands take a word of argument at most. "run a quarry down to y=12"
+  -- is a request that happens to start with a command word, and asking
+  -- about it every time would be worse than the mistake it prevents.
+  local words = 0
+  for _ in input:gmatch("%S+") do words = words + 1 end
+  if words > 2 then return nil end
+  return first
+end
+
 --- Blocking prompt with history, falling back to io.read outside CC.
 function console.ask(promptText, history)
   colour(_G.colors and colors.yellow or nil)

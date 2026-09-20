@@ -539,6 +539,43 @@ do
 end
 
 --------------------------------------------------------------------------
+group("a command typed without its slash")
+
+-- Typing "save makeBread" instead of "/save makeBread" sent it to Claude
+-- as a request: it cost an API call and overwrote the very program it
+-- was meant to keep. A false positive costs one keystroke; this costs
+-- money and work.
+local console = require("ui.console")
+local function slurp(p)
+  local h = io.open(p, "r"); if not h then return nil end
+  local s = h:read("*a"); h:close(); return s
+end
+local WORDS = { save = true, run = true, exit = true, again = true, notes = true }
+
+ok(console.forgottenSlash("save makeBread", WORDS) == "save",
+   "a bare command word with one argument is caught")
+ok(console.forgottenSlash("exit", WORDS) == "exit", "on its own too")
+ok(console.forgottenSlash("Save makeBread", WORDS) == "save", "whatever the case")
+ok(console.forgottenSlash("/save makeBread", WORDS) == nil,
+   "the correct form is left alone")
+ok(console.forgottenSlash("make some bread", WORDS) == nil,
+   "an ordinary request is left alone")
+ok(console.forgottenSlash("run a quarry down to y=12", WORDS) == nil,
+   "and so is a request that happens to start with a command word")
+ok(console.forgottenSlash("notes never dig above y=70 near the base", WORDS) == nil,
+   "long input is a request, whatever it starts with")
+ok(console.forgottenSlash("", WORDS) == nil, "empty input is not a command")
+
+for _, front in ipairs({ "ui/controller.lua", "ui/host.lua" }) do
+  local src = slurp(front) or ""
+  ok(src:find("COMMAND_WORDS", 1, true) ~= nil and
+     src:find("forgottenSlash", 1, true) ~= nil,
+     front .. " checks before spending an API call")
+  ok(src:find("local COMMAND_WORDS", 1, true) ~= nil,
+     front .. " defines the word set it uses")
+end
+
+--------------------------------------------------------------------------
 group("crafting: the grid is not the inventory")
 
 -- The real sequence: a turtle holding wheat and a crafting table, asked

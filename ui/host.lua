@@ -206,6 +206,13 @@ local HELP = {
   "/exit",
 }
 
+-- Command words from HELP, so the two cannot drift apart.
+local COMMAND_WORDS = {}
+for _, entry in ipairs(HELP) do
+  local name = entry:match("^/(%a[%w_]*)")
+  if name then COMMAND_WORDS[name] = true end
+end
+
 local function command(input)
   local cmd, rest = input:match("^/(%S+)%s*(.*)$")
   if not cmd then return false end
@@ -371,7 +378,14 @@ local function prompt()
     input = util.trim(input)
     if input ~= "" then
       history[#history + 1] = input
-      if not command(input) then
+      local slipped = console.forgottenSlash(input, COMMAND_WORDS)
+      if slipped then
+        console.warn(("'%s' is a command: /%s"):format(slipped, slipped))
+        local yn = console.ask("ask Claude instead? [y/N] ")
+        if not tostring(yn or ""):lower():match("^y") then input = "" end
+      end
+      if input == "" then
+      elseif not command(input) then
         local id, rest = input:match("^@(%d+)%s+(.+)$")
         if id then
           target = tonumber(id)
