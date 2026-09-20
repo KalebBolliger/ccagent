@@ -59,10 +59,26 @@ function console.code(src, maxLines)
   console.dim("---------------")
 end
 
+-- The shell prompts with "> ". So did this, which left the operator
+-- guessing which one they were typing at -- and the answer matters: one
+-- takes CC programs, the other takes English and spends money. Colour
+-- alone does not settle it, because a plain turtle is not an advanced
+-- computer and term.isColour() is false there.
+--
+-- Four characters, because the screen is 39 wide and every one of them
+-- is a character the operator cannot type in.
+console.PROMPT = "cc> "
+
+--- The prompt for a front end, optionally aimed at one turtle.
+function console.promptFor(target)
+  if target then return ("cc@%s> "):format(target) end
+  return console.PROMPT
+end
+
 --- Blocking prompt with history, falling back to io.read outside CC.
 function console.ask(promptText, history)
   colour(_G.colors and colors.yellow or nil)
-  write(promptText or "> ")
+  write(promptText or console.PROMPT)
   reset()
   if _G.read then return read(nil, history) end
   return io.read()

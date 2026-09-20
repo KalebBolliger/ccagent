@@ -63,6 +63,17 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   clearing, the placement and the craft. The prompt says to use it and
   never `turtle.craft`.
 
+**Changed**
+
+- The input prompt is `cc>` rather than `>`. Both the shell and ccagent
+  prompted identically, which made a screenshot — or a glance — ambiguous
+  about which one was waiting, and the two take different things: one
+  takes CC programs, the other takes English and spends money on it.
+  Colour does not settle it, since a plain turtle is not an advanced
+  computer and `term.isColour()` is false there. It lives in
+  `console.PROMPT` so all three front ends agree, and a host aimed at one
+  turtle shows `cc@7>`.
+
 **Fixed**
 
 - **Equipping a crafting table did not make the turtle able to craft.**

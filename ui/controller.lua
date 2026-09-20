@@ -295,7 +295,8 @@ function M.run(argv)
   console.status("probing...")
   agent.boot()
   console.info(agent.situation())
-  console.dim("type a request, or /help. press Q while a job runs to stop it.")
+  console.dim("type a request at cc>, or /help.")
+  console.dim("press Q while a job runs to stop it.")
   console.rule()
 
   local sess = session.new(cfg, agent)
@@ -312,7 +313,7 @@ function M.run(argv)
   end
 
   while ctx.running do
-    local input = console.ask("> ", history)
+    local input = console.ask(console.PROMPT, history)
     if input == nil then break end
     input = util.trim(input)
     if input ~= "" then

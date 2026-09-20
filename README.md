@@ -66,12 +66,16 @@ thing one chunk east" lands on the right one.
 ```
 
 ```
-> /who
+cc> /who
 *3    quarry-1     0,64,0 facing north | fuel 19834 | frame gps
  7    builder      118,71,-294 facing east | fuel 4102 | frame gps
-> @7 build a 9x9 cobblestone floor under you
-> all come home and unload
+cc> @7 build a 9x9 cobblestone floor under you
+cc@7> all come home and unload
 ```
+
+The prompt is `cc>` — not the shell's `>`, so it is clear which of the two
+you are typing at. On a host aimed at one turtle it carries the target:
+`cc@7>`.
 
 Both front-ends sit on the same core. Nothing under `agent/` or `claude/`
 knows which one is driving.
@@ -483,7 +487,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 320
+`lua5.3 test/all.lua` runs the three suites against a mock world — 321
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

@@ -131,6 +131,26 @@ for _, entry in ipairs({ "ui/controller.lua", "ui/host.lua" }) do
 end
 
 --------------------------------------------------------------------------
+group("the prompt is not the shell's")
+
+-- Typing a request at the shell, or a shell command at ccagent, is an
+-- easy mistake to make when both prompt with "> " -- and an expensive
+-- one, since one of them costs an API call.
+local promptSrc = slurp("ui/console.lua") or ""
+local prompt = promptSrc:match('console%.PROMPT%s*=%s*"([^"]*)"')
+ok(prompt ~= nil, "console owns one prompt string", prompt)
+ok(prompt ~= "> ", "and it is not the shell's", prompt)
+ok(prompt and #prompt <= 5,
+   "and it is short: the screen is 39 wide", prompt and #prompt)
+
+for _, f in ipairs({ "ui/controller.lua", "ui/worker.lua", "ui/host.lua" }) do
+  local src = slurp(f) or ""
+  ok(src:find('ask%("> "') == nil, f .. " does not hardcode the shell prompt")
+  ok(src:find("console%.PROMPT") ~= nil or src:find("console%.promptFor") ~= nil,
+     f .. " uses the shared one")
+end
+
+--------------------------------------------------------------------------
 group("the generated launcher")
 
 -- install.lua writes /ccagent.lua as a literal. It runs under CC's Lua, so

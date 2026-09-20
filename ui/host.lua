@@ -366,7 +366,7 @@ end
 local function prompt()
   local history = {}
   while running do
-    local input = console.ask(target and ("@" .. target .. "> ") or "> ", history)
+    local input = console.ask(console.promptFor(target), history)
     if input == nil then running = false; break end
     input = util.trim(input)
     if input ~= "" then

@@ -112,7 +112,7 @@ end
 local function prompt()
   local history = {}
   while running do
-    local input = console.ask("> ", history)
+    local input = console.ask(console.PROMPT, history)
     if input == nil then running = false; break end
     input = util.trim(input)
     if input == "/exit" then running = false
