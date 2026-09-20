@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-275 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+280 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. Every bug this project has
 actually shipped was the kind this catches — facing math, path replanning,
 sandbox leaks, nesting hazards. If you touched `agent/` or `claude/`, run it
@@ -108,6 +108,12 @@ Nothing should come back but `noreply@anthropic.com`.
   rule. The `frame` mistake in 1.1.0 was a plausible-sounding rule that
   nobody — including the test suite written to cover it — checked against
   a real example.
+- Anything a person reads in-game has to fit **39 columns by 13 rows** —
+  a turtle's screen — and CC terminals have no scrollback, so a prompt
+  taller than the screen scrolls its own explanation away before it can be
+  read. Put the detail in `README.md` and keep the in-game text to what
+  someone needs at that moment. `test/run_boot.lua` measures the
+  bootstrapper's prompts; nothing measures the rest, so check by eye.
 - A new file under `agent/`, `claude/` or `ui/` has to be added to
   `manifest.txt` as well, or turtles installed over the wire will not get
   it. `test/run_boot.lua` catches this; `lua5.3 test/all.lua` is the only

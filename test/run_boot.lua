@@ -303,7 +303,8 @@ ok(mock.files["/ccagent/agent/util.lua"] == "-- old but working",
 r = runBoot({ "--from", "/disk/nothing-here" }, {}, {})
 ok(not r.ok and tostring(r.err):find("manifest", 1, true) ~= nil,
    "so is a directory with no manifest in it", r.err)
-ok(tostring(r.err):find("drive", 1, true) ~= nil, "and it suggests the usual cause")
+ok(tostring(r.err):find("is the disk in", 1, true) ~= nil,
+   "and it suggests the usual cause", r.err)
 
 disk = onDisk("/disk/ccagent")
 disk["/ccagent/config.lua"] = "-- mine"
@@ -323,6 +324,29 @@ do
   ok(okRun, "a disk install works in a world with http disabled", err)
   ok(mock.files["/ccagent/agent/util.lua"] == "-- util", "and really writes the files")
 end
+
+--------------------------------------------------------------------------
+-- it has to fit a turtle
+
+-- A turtle terminal is 39x13 and CC has no scrollback: a prompt taller
+-- than the screen scrolls its own explanation away before anyone reads it,
+-- which is how the first real in-game run went. Progress and url lines are
+-- exempt -- a url is as long as it is -- but everything up to a prompt has
+-- to fit.
+local function fits(text, label)
+  local widest, count, worst = 0, 0, ""
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    count = count + 1
+    if #line > widest then widest, worst = #line, line end
+  end
+  ok(widest <= 39, label .. " stays inside 39 columns", widest .. ": " .. worst)
+  ok(count <= 13, label .. " stays inside 13 rows", count)
+end
+
+r = runBoot({}, { [HOST] = tree() }, nil, { HOST })
+ok(r.ok, "the asking path still works", r.err)
+fits((r.log:match("^(.-)from> ")), "the source prompt")
+fits((r.log:match("from> (.-)token> ")), "the token prompt")
 
 --------------------------------------------------------------------------
 -- tokens

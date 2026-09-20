@@ -51,6 +51,14 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- The first-run prompt did not fit a turtle. It printed about twenty lines
+  once wrapped, onto a 39x13 screen with no scrollback, so the explanation
+  scrolled away and left an unexplained `from>`. Found on the first real
+  in-game run, which is the only place it could have been found: every
+  automated check here renders to a terminal that does not exist. The
+  prompt is now 10 lines of at most 32 characters, and
+  `test/run_boot.lua` measures what the prompts actually print rather than
+  trusting them. Error messages got the same treatment.
 - The generated `/ccagent.lua` launcher called `table.unpack`, which does
   not exist in CC:Tweaked's Lua. Every `ccagent host <args>` and
   `ccagent worker <args>` with arguments after the mode would have failed

@@ -181,16 +181,17 @@ end
 
 --- Ask, once, on a machine that has never been told where to pull from.
 local function askForSource()
-  print("ccagent does not know where to pull from yet.")
+  -- A turtle screen is 39x13 and CC has no scrollback, so every line here
+  -- stays under 39 characters and the whole prompt under 13 lines. Prose
+  -- that scrolls off the top is prose nobody reads. Details: README.
+  print("ccagent: no source configured.")
   print("")
-  print("Give a directory this computer can see, or a url. In a url, put")
-  print("{path} where the file path goes, or name the directory the tree")
-  print("sits in and {path} is appended:")
+  print("Give a directory, or a url with")
+  print("{path} where the file path goes:")
   print("")
   print("  /disk/ccagent")
-  print("  https://files.mylan:8080/ccagent")
-  print("  https://raw.<forge-host>/OWNER/REPO/main/{path}")
-  print("  https://<api-host>/repos/OWNER/REPO/contents/{path}?ref=main")
+  print("  https://HOST/DIR")
+  print("  https://HOST/OWNER/REPO/{path}")
   print("")
   write("from> ")
   local answer = read()
@@ -198,8 +199,9 @@ local function askForSource()
   if answer == "" then error("no source given; nothing to pull from", 0) end
   if not answer:match("^%a[%w+.%-]*://") then return answer, nil end
   print("")
-  print("Access token, if this source needs one. Stored in " .. TOKEN_FILE)
-  print("as plain text on this computer. Blank for none.")
+  print("Token, if the source needs one.")
+  print("Blank for none. Kept in")
+  print(TOKEN_FILE)
   write("token> ")
   local token = read("*")
   token = token and (token:gsub("%s+", "")) or ""
@@ -213,8 +215,9 @@ local token  = cli.token or readToken()
 
 if not source then
   if not mayPrompt or not read then
-    error("no source configured. Pass --from <dir> or --url <template>, " ..
-          "or put one in " .. CONF .. ".\n\n" .. USAGE, 0)
+    error("no source configured.\n" ..
+          "pass --from <dir> or --url <url>,\n" ..
+          "or put one in " .. CONF, 0)
   end
   local asked
   source, asked = askForSource()
@@ -272,9 +275,9 @@ end
 ------------------------------------------------------------------ read ---
 
 if not isLocal and not http then
-  error("the http API is disabled in this world. Either copy the tree to " ..
-        DIR .. " by hand and run " .. DIR .. "/install, or put it on a " ..
-        "floppy and use: boot --from /disk/<dir>", 0)
+  error("http is disabled in this world.\n" ..
+        "copy the tree to " .. DIR .. " by hand,\n" ..
+        "or use a floppy: boot --from /disk/x", 0)
 end
 
 --- A file from a directory this computer can already see.
@@ -337,9 +340,8 @@ print("  from " .. locate("{path}") ..
 local text, err = fetch(MANIFEST)
 if not text then
   error("could not read the manifest.\n" .. err .. "\n" ..
-        (isLocal and "is the disk in the drive, and is that the right directory?"
-                 or "check the url, the ref, any token, and that this world " ..
-                    "allows http."), 0)
+        (isLocal and "is the disk in, and that path right?"
+                 or "check the url, the ref and any token."), 0)
 end
 local list = parseManifest(text)
 
