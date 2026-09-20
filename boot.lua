@@ -1,26 +1,29 @@
 --[[ /ccagent/boot.lua ---------------------------------------------------
   One command to put ccagent on a CC:Tweaked computer or turtle.
 
-  There is no source url baked into this file. Where the library comes from
-  is configuration, because it differs per deployment: a public repo, a
-  private one behind a token, a fork, a file server on the same LAN. On a
-  bare machine boot.lua asks; after that it remembers, in /.ccagent/source.
+  There is no source baked into this file. Where the library comes from is
+  configuration, because it differs per deployment: a public repo, a private
+  one behind a token, a fork, a file server, or a floppy disk. On a bare
+  machine boot.lua asks; after that it remembers, in /.ccagent/source.
 
       wget run <your-url>/boot.lua      -- asks where to pull from, then pulls
       ccagent update                    -- re-pulls from the remembered source
 
-  A source is a url template. It must contain {path}; {repo} and {ref} are
-  filled in from --repo/--ref (or the stored values) if you use them:
+  A source is either a url template or a directory this computer can see --
+  a mounted floppy is a perfectly good source and needs no http at all:
 
+      /disk/ccagent
       https://files.mylan:8080/ccagent/{path}
       https://raw.<forge>/{repo}/{ref}/{path}
       https://<api-host>/repos/{repo}/contents/{path}?ref={ref}
 
-  A url with no {path} in it is treated as a directory to append to, so
-  `--url https://files.mylan:8080/ccagent` means the same as the first one.
+  In a url, {path} says where the file path goes, and {repo}/{ref} are
+  filled from --repo/--ref. A source with no {path} in it -- every local
+  one, and the first url above -- is a directory to append the path to.
 
   Options, any order, all optional:
 
+      --from <dir>             a local directory: a floppy, or anywhere
       --url <template>         where to pull from; stored for next time
       --repo owner/name        fills {repo}
       --ref  branch|tag|sha    fills {ref}          (default: main)
@@ -33,9 +36,10 @@
       --no-setup               download only; do not run install.lua
       --no-prompt              fail rather than ask (for startup scripts)
 
-  A bare argument is read as a url if it looks like one, a repo if it looks
-  like owner/name, otherwise a ref -- so `boot v1.1.1` works against a
-  stored url template. A branch whose name contains a slash needs --ref.
+  A bare argument is read as a url if it looks like one, a path if it starts
+  with /, a repo if it looks like owner/name, otherwise a ref -- so
+  `boot v1.1.1` re-points a stored template and `boot /disk/ccagent`
+  installs off a floppy. A branch whose name contains a slash needs --ref.
 
   Arguments are for the saved-file form (`wget <url> boot.lua`, then
   `boot <args>`): `wget run` is not guaranteed to forward them.
@@ -59,6 +63,7 @@ local USAGE = [[
 ccagent bootstrap -- pulls the library onto this machine.
 
   boot                          use the stored source, or ask for one
+  boot --from /disk/ccagent     install from a floppy or any local directory
   boot --url <template>         a url containing {path}, or a directory
   boot --repo owner/name --ref r    fill {repo} and {ref} in the template
   boot <ref>                    just change the ref
@@ -89,7 +94,8 @@ end
 
 while i <= #args do
   local a = args[i]
-  if a == "--url" then cli.url = nextArg("--url")
+  if a == "--url" then cli.source = nextArg("--url")
+  elseif a == "--from" then cli.source = nextArg("--from")
   elseif a == "--repo" then cli.repo = nextArg("--repo")
   elseif a == "--ref" then cli.ref = nextArg("--ref")
   elseif a == "--token" then cli.token = nextArg("--token")
@@ -103,7 +109,8 @@ while i <= #args do
   elseif a == "--no-setup" then setup = false
   elseif a == "--no-prompt" then mayPrompt = false
   elseif a == "-h" or a == "--help" then print(USAGE); return
-  elseif a:match("^https?://") then cli.url = a
+  elseif a:match("^%a[%w+.%-]*://") then cli.source = a
+  elseif a:sub(1, 1) == "/" then cli.source = a
   elseif a:match("^[%w][%w%._%-]*/[%w][%w%._%-]*$") then cli.repo = a
   elseif a:sub(1, 1) == "-" then error("unknown option " .. a, 0)
   else cli.ref = a
@@ -139,8 +146,9 @@ local function writeConf(conf)
   local h = fs.open(CONF, "w")
   if not h then return end
   h.write("# where ccagent came from, and where `ccagent update` goes back to.\n")
-  h.write("# edit freely: url may contain {path}, {repo} and {ref}.\n")
-  h.write("url=" .. conf.url .. "\n")
+  h.write("# a directory (a floppy, say) or a url; a url may contain\n")
+  h.write("# {path}, {repo} and {ref}. edit freely.\n")
+  h.write("source=" .. conf.source .. "\n")
   if conf.repo then h.write("repo=" .. conf.repo .. "\n") end
   if conf.ref then h.write("ref=" .. conf.ref .. "\n") end
   local names = {}
@@ -175,49 +183,57 @@ end
 local function askForSource()
   print("ccagent does not know where to pull from yet.")
   print("")
-  print("Give a url. Use {path} where the file path goes, or just name the")
-  print("directory the tree sits in and {path} is appended:")
+  print("Give a directory this computer can see, or a url. In a url, put")
+  print("{path} where the file path goes, or name the directory the tree")
+  print("sits in and {path} is appended:")
   print("")
+  print("  /disk/ccagent")
   print("  https://files.mylan:8080/ccagent")
   print("  https://raw.<forge-host>/OWNER/REPO/main/{path}")
   print("  https://<api-host>/repos/OWNER/REPO/contents/{path}?ref=main")
   print("")
-  write("url> ")
-  local url = read()
-  url = url and (url:gsub("^%s+", ""):gsub("%s+$", "")) or ""
-  if url == "" then error("no url given; nothing to pull from", 0) end
+  write("from> ")
+  local answer = read()
+  answer = answer and (answer:gsub("^%s+", ""):gsub("%s+$", "")) or ""
+  if answer == "" then error("no source given; nothing to pull from", 0) end
+  if not answer:match("^%a[%w+.%-]*://") then return answer, nil end
   print("")
   print("Access token, if this source needs one. Stored in " .. TOKEN_FILE)
   print("as plain text on this computer. Blank for none.")
   write("token> ")
   local token = read("*")
   token = token and (token:gsub("%s+", "")) or ""
-  return url, token ~= "" and token or nil
+  return answer, token ~= "" and token or nil
 end
 
 local conf = readConf()
 
-local url   = cli.url or conf.url
-local token = cli.token or readToken()
+local source = cli.source or conf.source
+local token  = cli.token or readToken()
 
-if not url then
+if not source then
   if not mayPrompt or not read then
-    error("no source configured. Pass --url <template>, or put one in " ..
-          CONF .. ".\n\n" .. USAGE, 0)
+    error("no source configured. Pass --from <dir> or --url <template>, " ..
+          "or put one in " .. CONF .. ".\n\n" .. USAGE, 0)
   end
   local asked
-  url, asked = askForSource()
+  source, asked = askForSource()
   if asked then cli.token, token = asked, asked end
 end
+
+-- Anything without a scheme is a directory on this computer: a mounted
+-- floppy, or a tree someone dropped into the save by hand.
+local isLocal = source:match("^%a[%w+.%-]*://") == nil
 
 if cli.token then writeToken(cli.token) end
 
 local repo = cli.repo or conf.repo
 local ref  = cli.ref or conf.ref or DEFAULT_REF
 
--- A url that does not say where the path goes is a directory to append to.
-local template = url
-if not template:find("{path}", 1, true) then
+-- A source that does not say where the path goes is a directory to append
+-- to. Local sources are always directories.
+local template = source
+if isLocal or not template:find("{path}", 1, true) then
   template = template:gsub("/+$", "") .. "/{path}"
 end
 
@@ -238,7 +254,7 @@ if token then
   headers.Accept = headers.Accept or "application/vnd.github.raw, */*"
 end
 
-local function urlFor(path)
+local function locate(path)
   local vars = { path = path, repo = repo, ref = ref }
   local missing
   local out = template:gsub("{(%w+)}", function(key)
@@ -253,15 +269,29 @@ local function urlFor(path)
   return out
 end
 
------------------------------------------------------------------ fetch ---
+------------------------------------------------------------------ read ---
 
-if not http then
-  error("the http API is disabled in this world -- copy the tree to " ..
-        DIR .. " by hand, then run: " .. DIR .. "/install", 0)
+if not isLocal and not http then
+  error("the http API is disabled in this world. Either copy the tree to " ..
+        DIR .. " by hand and run " .. DIR .. "/install, or put it on a " ..
+        "floppy and use: boot --from /disk/<dir>", 0)
 end
 
-local function fetch(path)
-  local u = urlFor(path)
+--- A file from a directory this computer can already see.
+local function readLocal(path)
+  local at = locate(path)
+  if not fs.exists(at) then return nil, "not there  <- " .. at end
+  local h = fs.open(at, "r")
+  if not h then return nil, "cannot read  <- " .. at end
+  local data = h.readAll()
+  h.close()
+  if not data or data == "" then return nil, "empty file  <- " .. at end
+  return data
+end
+
+--- A file over http.
+local function readRemote(path)
+  local u = locate(path)
   local res, err = http.get(u, next(headers) and headers or nil)
   if not res then return nil, (err or "no response") .. "  <- " .. u end
   local code = res.getResponseCode and res.getResponseCode() or 200
@@ -279,6 +309,8 @@ local function fetch(path)
   return data
 end
 
+local fetch = isLocal and readLocal or readRemote
+
 --- A path may only name something under DIR, never climb out of it.
 local function safePath(p)
   return p:match("^[%w][%w%._%-/]*$") ~= nil and not p:find("%.%.", 1, true)
@@ -294,17 +326,20 @@ local function parseManifest(text)
       list[#list + 1] = p
     end
   end
-  if #list == 0 then error("manifest is empty: " .. urlFor(MANIFEST), 0) end
+  if #list == 0 then error("manifest is empty: " .. locate(MANIFEST), 0) end
   return list
 end
 
 print("ccagent bootstrap")
-print("  from " .. urlFor("{path}") .. (token and "  (with a token)" or ""))
+print("  from " .. locate("{path}") ..
+      ((not isLocal and token) and "  (with a token)" or ""))
 
 local text, err = fetch(MANIFEST)
 if not text then
-  error("could not read the manifest.\n" .. err ..
-        "\ncheck the url, the ref, any token, and that this world allows http.", 0)
+  error("could not read the manifest.\n" .. err .. "\n" ..
+        (isLocal and "is the disk in the drive, and is that the right directory?"
+                 or "check the url, the ref, any token, and that this world " ..
+                    "allows http."), 0)
 end
 local list = parseManifest(text)
 
@@ -340,7 +375,7 @@ for _, path in ipairs(list) do
   end
 end
 
-writeConf({ url = url, repo = repo, ref = ref, headers = stored })
+writeConf({ source = source, repo = repo, ref = ref, headers = stored })
 
 print(("  %d file%s written%s")
   :format(wrote, wrote == 1 and "" or "s",

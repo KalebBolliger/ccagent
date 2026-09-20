@@ -20,9 +20,15 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   `/.ccagent/source`, so later updates are `ccagent update`. A test fails if
   a url-valued constant reappears, and another fails if it ever guesses
   instead of asking.
-- The source is a url template: `{path}` is required, `{repo}` and `{ref}`
-  are filled from `--repo`/`--ref`. A url without `{path}` is treated as a
-  directory to append to. `--header "Name: value"` is repeatable and
+- A source can also be a directory this computer can see, so a floppy is a
+  first-class install medium: `boot --from /disk/ccagent` reads the manifest
+  off the disk and never touches http, which matters because not everyone
+  has somewhere to host a tree, and a Minecraft save is already a directory
+  on the operator's own machine. The disk is remembered like any other
+  source, so a later `ccagent update` re-reads it.
+- The source is otherwise a url template: `{path}` is required, `{repo}` and
+  `{ref}` are filled from `--repo`/`--ref`. A source without `{path}` — which
+  includes every local one — is treated as a directory to append to. `--header "Name: value"` is repeatable and
   remembered; `--token` sends a bearer header and keeps the secret in
   `/.ccagent/token`, deliberately not in `/.ccagent/source`, which is meant
   to stay safe to copy between turtles.
@@ -38,10 +44,10 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   drifts silently — the drift is only visible in-game, as a missing module.
   `test/run_boot.lua` fails if the manifest and the repo disagree in either
   direction.
-- `test/run_boot.lua`: 66 assertions over source resolution, templates,
-  headers and tokens, the remembered source, `config.lua` survival, the
-  all-or-nothing write, and refusal of a manifest path that would write
-  outside `/ccagent`.
+- `test/run_boot.lua`: 80 assertions over source resolution, templates,
+  local and remote reads, headers and tokens, the remembered source,
+  `config.lua` survival, the all-or-nothing write, and refusal of a manifest
+  path that would write outside `/ccagent`.
 
 **Fixed**
 

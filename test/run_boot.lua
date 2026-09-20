@@ -179,7 +179,7 @@ local conf = function(body) return { ["/.ccagent/source"] = body } end
 
 local r = runBoot({ "--no-prompt" }, { [HOST] = tree() })
 ok(not r.ok, "no configured source is an error, not a guess")
-ok(tostring(r.err):find("--url", 1, true) ~= nil, "and it names the way out", r.err)
+ok(tostring(r.err):find("--from", 1, true) ~= nil, "and it names the ways out", r.err)
 ok(#r.asked == 0, "and it asks the network for nothing")
 
 -- Nothing in boot.lua may assign a url-shaped literal to anything: the
@@ -227,23 +227,23 @@ ok(#r.asked == 0, "and nothing is fetched")
 --------------------------------------------------------------------------
 -- the remembered source, which is what `ccagent update` rides on
 
-r = runBoot({}, { [HOST] = tree() }, conf("url=" .. HOST .. "\n"))
+r = runBoot({}, { [HOST] = tree() }, conf("source=" .. HOST .. "\n"))
 ok(r.ok and r.asked[1] == HOST .. "/manifest.txt",
    "a bare re-run uses the stored source", r.asked[1])
 ok(#r.prompts == 0, "and does not ask")
 
 r = runBoot({ "v2" }, { ["https://raw.example/someone/ccagent/v2"] = tree() },
-            conf("url=" .. TPL .. "\nrepo=someone/ccagent\nref=v1.1.1\n"))
+            conf("source=" .. TPL .. "\nrepo=someone/ccagent\nref=v1.1.1\n"))
 ok(r.ok, "a bare ref re-points a stored template", r.err)
 
 r = runBoot({}, { [HOST] = tree() },
-            conf("# a comment\n\nurl=" .. HOST .. "\nheader.X-Key=abc\n"))
+            conf("# a comment\n\nsource=" .. HOST .. "\nheader.X-Key=abc\n"))
 ok(r.ok and r.headers[1] and r.headers[1]["X-Key"] == "abc",
    "stored headers are sent with every request")
 ok(r.headers[4] and r.headers[4]["X-Key"] == "abc", "every request, not just the first")
 
 r = runBoot({ "--url", "https://other.example/x" }, { ["https://other.example/x"] = tree() },
-            conf("url=" .. HOST .. "\n"))
+            conf("source=" .. HOST .. "\n"))
 ok(r.ok and r.asked[1]:find("other.example", 1, true) ~= nil,
    "an explicit url beats the stored one", r.asked[1])
 ok((mock.files["/.ccagent/source"] or ""):find("https://other.example/x", 1, true) ~= nil,
@@ -260,8 +260,69 @@ ok((mock.files["/.ccagent/source"] or ""):find(HOST, 1, true) ~= nil,
    "and remembers the answer")
 
 r = runBoot({}, { [HOST] = tree() }, nil, { "" })
-ok(not r.ok and tostring(r.err):find("no url", 1, true) ~= nil,
+ok(not r.ok and tostring(r.err):find("no source", 1, true) ~= nil,
    "an empty answer is an error, not a default", r.err)
+
+--------------------------------------------------------------------------
+-- a local source: a floppy, or anything else this computer can see
+
+--- Lay a tree out under a directory in the mock filesystem.
+local function onDisk(at, extra)
+  local files = {}
+  for path, body in pairs(tree(nil, extra)) do
+    files[at .. "/" .. path] = body
+  end
+  return files
+end
+
+r = runBoot({ "--from", "/disk/ccagent" }, {}, onDisk("/disk/ccagent"))
+ok(r.ok, "a floppy is a source", r.err)
+ok(mock.files["/ccagent/agent/util.lua"] == "-- util", "its files land under /ccagent")
+ok(#r.asked == 0, "and http is never touched", #r.asked)
+ok(r.ran and r.ran[1] == "/ccagent/install.lua", "install.lua still gets the setup")
+ok((mock.files["/.ccagent/source"] or ""):find("source=/disk/ccagent", 1, true) ~= nil,
+   "the disk is remembered like any other source", mock.files["/.ccagent/source"])
+
+r = runBoot({ "/disk/ccagent" }, {}, onDisk("/disk/ccagent"))
+ok(r.ok, "a bare path is read as a source", r.err)
+
+local disk = onDisk("/disk/ccagent")
+disk["/.ccagent/source"] = "source=/disk/ccagent\n"
+r = runBoot({}, {}, disk)
+ok(r.ok and #r.asked == 0, "a stored local source needs no arguments", r.err)
+
+disk = onDisk("/disk/ccagent")
+disk["/disk/ccagent/agent/util.lua"] = nil
+disk["/ccagent/agent/util.lua"] = "-- old but working"
+r = runBoot({ "--from", "/disk/ccagent" }, {}, disk)
+ok(not r.ok and tostring(r.err):find("not there", 1, true) ~= nil,
+   "a file missing from the disk is a clear error", r.err)
+ok(mock.files["/ccagent/agent/util.lua"] == "-- old but working",
+   "and still all or nothing")
+
+r = runBoot({ "--from", "/disk/nothing-here" }, {}, {})
+ok(not r.ok and tostring(r.err):find("manifest", 1, true) ~= nil,
+   "so is a directory with no manifest in it", r.err)
+ok(tostring(r.err):find("drive", 1, true) ~= nil, "and it suggests the usual cause")
+
+disk = onDisk("/disk/ccagent")
+disk["/ccagent/config.lua"] = "-- mine"
+r = runBoot({ "--from", "/disk/ccagent" }, {}, disk)
+ok(mock.files["/ccagent/config.lua"] == "-- mine",
+   "config.lua survives a disk install too")
+
+-- No http in this world at all: the floppy path must still work.
+do
+  mock.reset()
+  for path, body in pairs(onDisk("/disk/ccagent")) do mock.files[path] = body end
+  local savedPrint = _G.print
+  _G.http, _G.write, _G.print = nil, function() end, function() end
+  _G.shell = { run = function() end }
+  local okRun, err = pcall(BOOT, "--from", "/disk/ccagent")
+  _G.print, _G.write, _G.shell = savedPrint, nil, nil
+  ok(okRun, "a disk install works in a world with http disabled", err)
+  ok(mock.files["/ccagent/agent/util.lua"] == "-- util", "and really writes the files")
+end
 
 --------------------------------------------------------------------------
 -- tokens
@@ -368,14 +429,14 @@ ok(r.ok and #r.asked == 0, "--help asks the network for nothing")
 
 do
   mock.reset()
-  mock.files["/.ccagent/source"] = "url=" .. HOST .. "\n"
+  mock.files["/.ccagent/source"] = "source=" .. HOST .. "\n"
   local savedPrint = _G.print
   _G.http, _G.write, _G.print = nil, function() end, function() end
   local okRun, err = pcall(BOOT)
   _G.print, _G.write = savedPrint, nil
   ok(not okRun and tostring(err):find("http", 1, true) ~= nil,
-     "no http is explained, not a nil index", err)
-  ok(tostring(err):find("by hand", 1, true) ~= nil, "and it says what to do instead")
+     "no http against a url is explained, not a nil index", err)
+  ok(tostring(err):find("floppy", 1, true) ~= nil, "and it says what to do instead")
 end
 
 --------------------------------------------------------------------------

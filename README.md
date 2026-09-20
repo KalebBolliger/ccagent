@@ -103,11 +103,14 @@ ccagent update
 
 ### Where it pulls from
 
-A source is a url template containing `{path}`. `{repo}` and `{ref}` are
-filled in from `--repo` / `--ref` if you use them. A url with no `{path}` is
-treated as a directory and `/{path}` is appended:
+A source is either a directory this computer can see — a mounted floppy will
+do — or a url template containing `{path}`, with `{repo}` and `{ref}` filled
+in from `--repo` / `--ref` if you use them. Anything with no `{path}` in it,
+which includes every local path, is treated as a directory and `/{path}` is
+appended:
 
 ```
+/disk/ccagent
 https://files.mylan:8080/ccagent
 https://raw.<forge-host>/OWNER/REPO/main/{path}
 https://<api-host>/repos/OWNER/REPO/contents/{path}?ref={ref}
@@ -115,6 +118,7 @@ https://<api-host>/repos/OWNER/REPO/contents/{path}?ref={ref}
 
 | | |
 |---|---|
+| `boot --from /disk/ccagent` | install from a floppy, or any local directory |
 | `boot --url <template>` | set (and remember) the source |
 | `boot v1.1.1` | change only the ref |
 | `boot --repo you/ccagent --ref dev` | fill the template's placeholders |
@@ -149,55 +153,102 @@ header.X-Deploy-Key=whatever
 
 Seed it from a floppy and a whole fleet installs without being asked anything.
 
-### Pulling from a private repository
+### No web server? Use a floppy
 
-`--token <secret>` sends `Authorization: Bearer <secret>` with every request,
-and stores the token in `/.ccagent/token` — not in `/.ccagent/source`, so the
-source file stays safe to copy between turtles. When a token is present
-`boot.lua` also asks for raw content rather than metadata, since a forge that
-answers a file request with base64 JSON would otherwise install a tree that
-fails later as a syntax error. (If it ever does, `boot.lua` says so instead of
-writing it.) Override with `--header "Accept: …"`.
+You do not need anywhere to host this. A Minecraft save is a directory on your
+disk, and everything a computer can see is a directory in it, so you can put
+the tree there and let the game hand it around.
 
-For GitHub specifically, the contents API serves private files to a
-fine-grained token with read access to that one repository:
+For one machine, drop the repo into that computer's own folder — find its id
+with the `id` command in-game — and run the installer:
 
 ```
-wget <wherever-you-keep-this>/boot.lua
+<save>/computercraft/computer/<id>/ccagent/     <- the tree goes here
+```
+```
+ccagent/install
+```
+
+For more than one, use a floppy, which is the same idea but reusable. Put the
+tree in a disk's folder, then put that disk in a drive next to each turtle:
+
+```
+<save>/computercraft/disk/<n>/ccagent/          <- the tree goes here
+```
+```
+/disk/ccagent/boot --from /disk/ccagent
+```
+
+That runs `boot.lua` straight off the floppy: it reads `manifest.txt` from the
+disk, writes `/ccagent`, keeps any `config.lua` already on the turtle, and
+hands off to `install.lua` as usual. The disk is remembered as the source, so
+updating a turtle later is `ccagent update` with the floppy in the drive —
+refresh the files on the disk once and every machine can re-pull from it.
+
+No http is involved at any point, so this works in a world with the HTTP API
+switched off entirely.
+
+### Pulling from a private repository
+
+If you would rather pull over the wire, `--token <secret>` sends
+`Authorization: Bearer <secret>` with every request and stores the token in
+`/.ccagent/token` — not in `/.ccagent/source`, so the source file stays safe to
+copy between turtles. When a token is present `boot.lua` also asks for raw
+content rather than metadata, since a forge that answers a file request with
+base64 JSON would otherwise install a tree that fails later as a syntax error.
+(If it ever does, `boot.lua` says so instead of writing it.) Override with
+`--header "Accept: …"`.
+
+For GitHub, the contents API serves private files to a fine-grained token with
+read access to that one repository:
+
+```
 boot --url "https://api.github.com/repos/{repo}/contents/{path}?ref={ref}" \
      --repo you/ccagent --token github_pat_...
 ```
 
-Two things to weigh before doing that. The token sits in plain text on the
-in-game computer, readable by anyone who can reach that computer's files or
-the world save — so scope it to one repository, read-only, with an expiry. And
-the server's CC:Tweaked config has to allow the host you point at.
+The token sits in plain text on the in-game computer, readable by anyone who
+can reach that computer's files or the world save — so scope it to one
+repository, read-only, with an expiry. The floppy above is the option where no
+secret exists in Minecraft at all.
 
-If you would rather no token existed in Minecraft at all, mirror the repo to a
-file server the game can reach and point `--url` at that instead. The private
-repo then never touches the turtle, and the mirror is the only thing you have
-to keep in sync. Note that CC:Tweaked's default HTTP rules **block private IP
-ranges**, so a mirror on your LAN needs an explicit allow rule in the server's
-config before any turtle can reach it.
+### Which host the game will talk to
+
+CC:Tweaked's HTTP rules live in `computercraft-server.toml` — in `config/` on
+a dedicated server, and under the world's `serverconfig/` in singleplayer. The
+default rules allow the public internet but **deny private IP ranges**, so a
+public API needs no change while a machine on your own LAN needs an explicit
+allow rule ahead of the `$private` deny:
+
+```toml
+[[http.rules]]
+    host = "192.168.0.0/16"
+    action = "allow"
+```
+
+None of this is affected by the mod loader: NeoForge, Forge and Fabric builds
+of CC:Tweaked run the same Lua, so every path and command here is the same on
+all of them. Only the config and save locations are the loader's business, and
+the two above are where current builds put them.
 
 ### Without HTTP at all
 
-Copy the tree to `/ccagent/` by hand — a disk drive and a floppy will do, or
-drop the files straight into the world save — then:
+Use the floppy route above, or copy the tree to `/ccagent/` by hand and run:
 
 ```
 ccagent/install
 ```
 
-`ccagent/install <base-url>` also still works for a plain directory: it fetches
-`boot.lua` and lets it do the pulling, so the file list only ever lives in
-`manifest.txt`.
+`ccagent/install <base-url>` also still works for a plain directory url: it
+fetches `boot.lua` and lets it do the pulling, so the file list only ever lives
+in `manifest.txt`.
 
-Requirements: CC:Tweaked with the HTTP API enabled (default), `api.anthropic.com`
-reachable, and whatever host you pull from allowed by the server's HTTP rules.
-A GPS constellation is optional but strongly recommended — without it
-coordinates are local to wherever the turtle booted. Everything else is
-detected at runtime.
+Requirements: CC:Tweaked with the HTTP API enabled (default) and
+`api.anthropic.com` reachable — that one is not optional, since it is how
+Claude is asked anything; installing from a floppy avoids needing http for the
+*install*, not for running. A GPS constellation is optional but strongly
+recommended — without it coordinates are local to wherever the turtle booted.
+Everything else is detected at runtime.
 
 ## Using it
 
@@ -424,7 +475,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 261
+`lua5.3 test/all.lua` runs the three suites against a mock world — 275
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
