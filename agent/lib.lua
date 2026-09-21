@@ -131,9 +131,15 @@ function lib.save(name, code, meta)
   return true
 end
 
+--- Remove a saved program: its source, its index entry -- which is where
+--- registration lives, so this unregisters it too -- and the in-memory
+--- copies. Returns false when there was nothing of that name, so the
+--- operator is not told a typo was deleted.
 function lib.delete(name)
-  if fs and fs.exists(pathFor(name)) then fs.delete(pathFor(name)) end
   local idx = loadIndex()
+  local existed = (fs and fs.exists(pathFor(name))) or idx[name] ~= nil
+  if not existed then return false, "no saved program called " .. tostring(name) end
+  if fs and fs.exists(pathFor(name)) then fs.delete(pathFor(name)) end
   idx[name] = nil
   sources[name], contracts[name] = nil, nil
   saveIndex()

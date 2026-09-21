@@ -51,6 +51,25 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **`block.fill` dropped the cells it could not reach.** A 3x3 wall came
+  back as "placed = 0, skipped = 2" with the turtle motionless: nine
+  cells, and seven of them counted nowhere, because a cell whose move
+  failed incremented neither counter. The totals did not add up and the
+  operator was given nothing to act on. `fill` and `clear` now return an
+  `info` table — `cells`, `unreachable`, `unplaceable`, `stopped`,
+  `reason` — where placed + skipped + the failures equals the cells
+  looked at, and the reason carries the error from the move that failed
+  ("could not reach 0,64,-3: stuck at step 1/68: out of fuel"). They also
+  stop after three consecutive failures rather than walking the rest of
+  the box: a turtle that cannot reach the first three cells will not
+  reach the next five hundred, and grinding through them buries the
+  cause. The prompt tells generated code to report `info` when it is set.
+- `lib.delete` claimed success for a name that was never saved, so `/del
+  typo` answered "deleted typo". It returns false with a reason now.
+  Deleting does remove everything — source, index entry, and the
+  registration that lives in it, so a deleted routine also leaves the
+  manifest Claude is shown.
+
 - **A hardcoded list decided what fuel is.** A turtle at zero fuel
   carrying thirty-two lignite coal from a mod reported "Refueled: 0 -> 0"
   and then warned its way through a build it could not move for.

@@ -613,6 +613,66 @@ ok(situation:find("bread", 1, true) == nil,
    "and does not describe what was taken out", situation)
 
 --------------------------------------------------------------------------
+group("a fill that placed nothing has to say why")
+
+-- Nine cells came back as "placed = 0, skipped = 2" and the turtle did
+-- not move. The other seven were cells whose move failed, and a failed
+-- move incremented neither counter -- so the report did not add up and
+-- gave the operator nothing to act on.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+inv.invalidate()
+mock.turtle.fuel = 0                      -- cannot move anywhere
+
+local placed, skipped, info = block.fill({ x = 0, y = 64, z = -3 },
+                                         { x = 2, y = 66, z = -3 },
+                                         "minecraft:cobblestone")
+ok(placed == 0, "nothing was placed", placed)
+ok(info ~= nil, "and there is a third return value that says so")
+ok(info.unreachable > 0, "counting the cells it could not reach",
+   info and info.unreachable)
+ok(placed + skipped + info.unreachable + info.unplaceable == info.cells,
+   "so the numbers add up to the cells it looked at",
+   info and (placed .. "+" .. skipped .. "+" .. info.unreachable ..
+             "+" .. info.unplaceable .. " vs " .. info.cells))
+ok(info.reason and #info.reason > 0, "with a reason worth reporting",
+   info and info.reason)
+
+-- And it stops rather than grinding through hundreds of cells it cannot
+-- reach, which is what makes the failure instant rather than slow.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+inv.invalidate()
+mock.turtle.fuel = 0
+placed, skipped, info = block.fill({ x = 20, y = 64, z = -20 },
+                                   { x = 29, y = 73, z = -20 },
+                                   "minecraft:cobblestone")
+ok(info.stopped, "it gives up")
+ok(info.cells < 100, "before walking the whole box", info.cells)
+ok(tostring(info.reason):find("gave up", 1, true) ~= nil,
+   "and says that is what happened", info.reason)
+
+-- A fill that can do its job still reports plainly.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+inv.invalidate()
+placed, skipped, info = block.fill({ x = 0, y = 64, z = -2 },
+                                   { x = 0, y = 64, z = -2 },
+                                   "minecraft:cobblestone")
+ok(placed == 1, "one cell, one block", placed)
+ok(not info.stopped and info.unreachable == 0, "nothing to explain")
+
+-- block.clear had the same hole.
+fresh()
+mock.fill({ 0, 64, -3 }, { 2, 66, -3 }, "minecraft:stone")
+mock.turtle.fuel = 0
+local dug, clearInfo = block.clear({ x = 0, y = 64, z = -3 },
+                                   { x = 2, y = 66, z = -3 })
+ok(dug == 0, "nothing dug", dug)
+ok(clearInfo and clearInfo.unreachable > 0, "and the misses are counted",
+   clearInfo and clearInfo.unreachable)
+
+--------------------------------------------------------------------------
 group("fuel is whatever the game will burn")
 
 -- A turtle at zero fuel carrying thirty-two lignite coal from a mod

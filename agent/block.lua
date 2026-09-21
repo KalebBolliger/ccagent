@@ -281,10 +281,30 @@ end
 
 --- Fill a whole box with blocks from the inventory, walking it efficiently.
 --- Skips cells that are already solid unless `replace` is set.
+--- Fill a box with `spec`.
+---
+--- Returns placed, skipped, info. `skipped` is cells that were already
+--- solid; `info` accounts for everything else that did not get placed,
+--- because placed + skipped used to be all the caller saw and a cell the
+--- turtle could not reach was counted in neither. Nine cells coming back
+--- as "placed 0, skipped 2" reads as a job that did nothing for no
+--- reason, when in fact seven moves failed and nobody said so.
+---
+---   info = { cells = 9, unreachable = 7, unplaceable = 0,
+---            stopped = true, reason = "..." }
+---
+--- opts.giveUpAfter  consecutive failures before stopping (default 3);
+---                   a turtle that cannot reach the first three cells is
+---                   not going to reach the next five hundred.
 function block.fill(cornerA, cornerB, spec, opts)
   opts = opts or {}
   local placed, skipped = 0, 0
+  local info = { cells = 0, unreachable = 0, unplaceable = 0 }
+  local consecutive = 0
+  local limit = opts.giveUpAfter or 3
+
   for cell in geom.iterBox(cornerA, cornerB, { topDown = opts.topDown }) do
+    info.cells = info.cells + 1
     if opts.limit and placed >= opts.limit then break end
     if world.isSolid(cell) == true and not opts.replace then
       skipped = skipped + 1
@@ -292,6 +312,10 @@ function block.fill(cornerA, cornerB, spec, opts)
       local ok, err = nav.moveTo(cell, { adjacent = true, dig = opts.dig })
       if not ok then
         if opts.strict then return false, err end
+        info.unreachable = info.unreachable + 1
+        info.reason = info.reason or ("could not reach " .. geom.tostring(cell) ..
+                                      (err and (": " .. tostring(err)) or ""))
+        consecutive = consecutive + 1
       else
         local p = nav.pos()
         local d = geom.sub(cell, p)
@@ -301,29 +325,62 @@ function block.fill(cornerA, cornerB, spec, opts)
         else dir = geom.FACING_NAME[geom.facingToward(p, cell)] end
         if block.place(dir, spec, { replace = opts.replace }) then
           placed = placed + 1
+          consecutive = 0
         elseif opts.strict then
           return false, "could not place at " .. geom.tostring(cell)
+        else
+          info.unplaceable = info.unplaceable + 1
+          info.reason = info.reason or ("could not place at " ..
+                                        geom.tostring(cell))
+          consecutive = consecutive + 1
         end
       end
     end
     if opts.onCell then opts.onCell(cell, placed) end
+    if consecutive >= limit then
+      info.stopped = true
+      info.reason = ("gave up after %d cells in a row failed -- %s")
+        :format(consecutive, info.reason or "no reason recorded")
+      break
+    end
   end
-  return placed, skipped
+  return placed, skipped, info
 end
 
 --- Clear a box of blocks. The quarry/excavation primitive.
+--- Excavate a box. Returns dug, info -- see block.fill for why the
+--- failures are counted rather than dropped.
 function block.clear(cornerA, cornerB, opts)
   opts = opts or {}
   local dug = 0
+  local info = { cells = 0, unreachable = 0 }
+  local consecutive = 0
+  local limit = opts.giveUpAfter or 3
+
   for cell in geom.iterBox(cornerA, cornerB, { topDown = true }) do
+    info.cells = info.cells + 1
     if world.isSolid(cell) ~= false then
-      local ok = nav.moveTo(cell, { dig = true, box = opts.box })
-      if ok then dug = dug + 1 end
+      local ok, err = nav.moveTo(cell, { dig = true, box = opts.box })
+      if ok then
+        dug = dug + 1
+        consecutive = 0
+      else
+        info.unreachable = info.unreachable + 1
+        info.reason = info.reason or ("could not reach " .. geom.tostring(cell) ..
+                                      (err and (": " .. tostring(err)) or ""))
+        consecutive = consecutive + 1
+      end
     end
     if opts.onCell then opts.onCell(cell, dug) end
     if opts.dumpWhenFull and inv.freeSlots() == 0 then opts.dumpWhenFull() end
+    if consecutive >= limit then
+      info.stopped = true
+      info.reason = ("gave up after %d cells in a row failed -- %s")
+        :format(consecutive, info.reason or "no reason recorded")
+      break
+    end
   end
-  return dug
+  return dug, info
 end
 
 --------------------------------------------------------------- entities ---

@@ -484,6 +484,43 @@ job.report("finished anyway")
 end
 
 --------------------------------------------------------------------------
+group("deleting a saved program")
+fresh()
+do
+  local function listed(name)
+    for _, n in ipairs(lib.names()) do if n == name then return true end end
+    return false
+  end
+
+  lib.save("doomed", "job.report(1)")
+  ok(lib.source("doomed") ~= nil, "saved")
+  ok(listed("doomed"), "and listed")
+  ok(lib.delete("doomed"), "deleted")
+  ok(lib.source("doomed") == nil, "the source is gone")
+  ok(not listed("doomed"), "and so is the listing")
+  ok(not lib.delete("doomed"), "deleting it again says so, rather than lying")
+  ok(not lib.delete("never-existed"), "as does deleting a typo")
+
+  -- Registration lives in the same index entry, so deleting has to take
+  -- it with them: a routine Claude can still call but whose source is
+  -- gone is worse than either.
+  lib.save("promoted", [[
+--[==[ @ccagent
+name:  promoted
+doc:   does a thing
+frame: anywhere
+]==]
+job.report("ok")
+]])
+  ok(lib.register("promoted"), "registered")
+  ok(lib.has("promoted"), "and callable by Claude")
+  lib.delete("promoted")
+  ok(not lib.has("promoted"), "deleting it unregisters it too")
+  local manifest = lib.manifest()
+  ok(manifest == nil or manifest:find("promoted", 1, true) == nil,
+     "and it leaves the manifest Claude is shown", manifest)
+end
+
 group("prompt integration")
 fresh()
 do

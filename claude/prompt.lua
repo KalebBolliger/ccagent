@@ -83,6 +83,11 @@ HOW TO WRITE GOOD TURTLE CODE
   turtle cannot: check what it is carrying before concluding it is
   incapable, and check that a refuel actually worked before moving on.
 - Narrate with job.say() at meaningful milestones, not every block.
+- block.fill and block.clear return an `info` table after their counts.
+  If info.unreachable or info.stopped is set, the job did not do what was
+  asked and info.reason says why -- put it in the report and warn. A
+  report of "placed 0" with no explanation is the least useful thing a
+  program can produce.
 - Finish with job.report(...) carrying the result: a count, a list of
   positions, a summary table. The operator sees it and it becomes context
   for their follow-up request.
