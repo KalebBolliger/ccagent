@@ -51,6 +51,29 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- **A 3x3 wall came out with a hole in it.** `placed = 8, skipped = 1`,
+  nothing unreachable: the skipped cell was one world memory claimed was
+  already solid, and was not. `block.fill` treated a remembered
+  observation as authoritative even though `agent/world.lua` has always
+  said otherwise — it carries a timestamp and a `world.isStale` whose own
+  comment calls old observations "advisory". Fill now goes and looks:
+  `block.place` reports "space is occupied" for a cell that really is
+  filled, which counts as skipped and corrects the memory from what the
+  turtle saw. `opts.trustMemory` restores the cheap path for jobs big
+  enough that the moves matter, and even then only for a fresh record.
+  `block.clear` had the mirror image — a stale "air" left a block behind
+  in the excavation — and takes the same rule.
+- **World memory survived the coordinate frame it was recorded in.**
+  Without GPS, coordinates are local to wherever the turtle booted; break
+  one and put it down and the same keys name different blocks. Nothing
+  cleared the memory across that boundary, so every remembered
+  observation quietly became a claim about somewhere else — the same
+  reasoning error 1.1.0 made about saved routines, fixed there in 1.1.1
+  and never applied to the memory those routines read. `world.useFrame`
+  drops observations when the frame id changes, and is called where the
+  other invalidations are. GPS frames are mutually consistent, share the
+  id "gps", and survive reboots, which is the point of having GPS.
+
 - **`block.fill` dropped the cells it could not reach.** A 3x3 wall came
   back as "placed = 0, skipped = 2" with the turtle motionless: nine
   cells, and seven of them counted nowhere, because a cell whose move

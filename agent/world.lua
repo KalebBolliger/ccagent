@@ -59,6 +59,39 @@ function world.clear()
   state.set("world", blocks)
 end
 
+------------------------------------------------------------- frames -------
+
+--- Which coordinate frame these observations belong to, and forget them
+--- if that frame is no longer the one we are in.
+---
+--- Every entry here is keyed by coordinate, and without GPS coordinates
+--- are local to wherever the turtle booted. Break a turtle and put it
+--- back down and it starts a fresh local frame: the same keys now name
+--- different blocks in the world, so a remembered "solid at 0,64,-3"
+--- becomes a claim about somewhere else entirely -- and callers that
+--- trust it skip work they should have done. `lib.run` already refuses to
+--- run a frame-bound routine across that boundary; this is the same
+--- reasoning applied to the memory the routines read.
+---
+--- GPS frames are mutually consistent, so they share the id "gps" and
+--- survive reboots, which is the whole point of having GPS.
+---
+--- Returns true when memory was dropped. world does not ask nav for the
+--- id -- nav reads world for pathfinding, and that way lies a require
+--- cycle -- so the caller passes it in.
+function world.useFrame(id)
+  if id == nil then return false end
+  local known = state.get("worldFrame")
+  if known == id then return false end
+  local had = known ~= nil and next(ensure()) ~= nil
+  if had then world.clear() end
+  state.set("worldFrame", id)
+  return had
+end
+
+--- The frame the current memory was recorded in, if any.
+function world.frame() return state.get("worldFrame") end
+
 --------------------------------------------------------------- reading ----
 
 function world.get(p)

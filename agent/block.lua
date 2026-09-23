@@ -260,6 +260,12 @@ function block.place(dir, spec, opts)
 
   if api.detect() then
     if not opts.replace then
+      -- We are looking right at it, so correct the memory rather than
+      -- leaving whatever stale belief sent us here.
+      if target then
+        local seen, info = api.inspect()
+        world.set(target, (seen and info and info.name) or "unknown")
+      end
       if restore then restore() end
       return false, "space is occupied"
     end
@@ -306,7 +312,15 @@ function block.fill(cornerA, cornerB, spec, opts)
   for cell in geom.iterBox(cornerA, cornerB, { topDown = opts.topDown }) do
     info.cells = info.cells + 1
     if opts.limit and placed >= opts.limit then break end
-    if world.isSolid(cell) == true and not opts.replace then
+    -- Skipping on memory is how a wall ends up with a hole in it. An
+    -- observation is a claim about a moment, and the cost of it being
+    -- wrong here is exactly the block that never gets placed -- so by
+    -- default go and let block.place report what is actually there.
+    -- opts.trustMemory restores the cheap path for jobs large enough that
+    -- the moves matter, and even then only for a fresh observation.
+    local believedSolid = world.isSolid(cell) == true
+       and opts.trustMemory and not world.isStale(cell)
+    if believedSolid and not opts.replace then
       skipped = skipped + 1
     else
       local ok, err = nav.moveTo(cell, { adjacent = true, dig = opts.dig })
@@ -323,15 +337,21 @@ function block.fill(cornerA, cornerB, spec, opts)
         if d.y == 1 then dir = "up"
         elseif d.y == -1 then dir = "down"
         else dir = geom.FACING_NAME[geom.facingToward(p, cell)] end
-        if block.place(dir, spec, { replace = opts.replace }) then
+        local ok2, why = block.place(dir, spec, { replace = opts.replace })
+        if ok2 then
           placed = placed + 1
+          consecutive = 0
+        elseif why == "space is occupied" then
+          -- Already filled, observed rather than remembered.
+          skipped = skipped + 1
           consecutive = 0
         elseif opts.strict then
           return false, "could not place at " .. geom.tostring(cell)
         else
           info.unplaceable = info.unplaceable + 1
           info.reason = info.reason or ("could not place at " ..
-                                        geom.tostring(cell))
+                                        geom.tostring(cell) ..
+                                        (why and (": " .. tostring(why)) or ""))
           consecutive = consecutive + 1
         end
       end
@@ -359,7 +379,11 @@ function block.clear(cornerA, cornerB, opts)
 
   for cell in geom.iterBox(cornerA, cornerB, { topDown = true }) do
     info.cells = info.cells + 1
-    if world.isSolid(cell) ~= false then
+    -- Same rule as fill: a remembered "air" is a reason to look, not a
+    -- reason to leave a block behind in the hole.
+    local believedAir = world.isSolid(cell) == false
+       and opts.trustMemory and not world.isStale(cell)
+    if not believedAir then
       local ok, err = nav.moveTo(cell, { dig = true, box = opts.box })
       if ok then
         dug = dug + 1

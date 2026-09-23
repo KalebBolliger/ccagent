@@ -103,6 +103,11 @@ function agent.boot(opts)
     if not ok then util.log.warn("calibration: %s", tostring(err)) end
     if not nav.home() then nav.setHome() end
   end
+  -- Observations are only about the frame they were made in. Without GPS
+  -- a re-placed turtle starts a new one, and the old memory then
+  -- describes somewhere else.
+  world.useFrame(nav.frameId())
+
   state.flush()
   return agent
 end
@@ -122,6 +127,7 @@ function agent.situation()
   -- turtle by hand since the last one.
   inv.invalidate()
   caps.refreshCheap()
+  world.useFrame(nav.frameId())
   local bits = {
     "caps: " .. caps.summary(),
   }
@@ -169,7 +175,7 @@ registry.add("block", block, "look at, break, place and hit blocks in any direct
   { fn = "dig",      sig = "(dir, opts?) -> ok, err",       doc = "opts: only=pattern, repeatWhileFalling, force" },
   { fn = "digVein",  sig = "(pattern, opts?) -> n, err",    doc = "flood-fill mine a connected vein, then return" },
   { fn = "place",    sig = "(dir, spec?, opts?) -> ok, err", doc = "spec is an item spec; opts: replace, text" },
-  { fn = "fill",     sig = "(a, b, spec, opts?) -> placed, skipped, info", doc = "fill a box; info.unreachable/.stopped/.reason explain anything not placed" },
+  { fn = "fill",     sig = "(a, b, spec, opts?) -> placed, skipped, info", doc = "fill a box; checks each cell rather than trusting memory; info explains anything not placed" },
   { fn = "clear",    sig = "(a, b, opts?) -> dug, info",    doc = "excavate a box; info explains anything not dug" },
   { fn = "attack",   sig = "(dir, opts?) -> hits",          doc = "opts: times, delay" },
   { fn = "drop",     sig = "(dir, spec, opts?) -> n",       doc = "drop matching items that way" },
@@ -208,6 +214,7 @@ registry.add("world", world, "persistent memory of blocks already seen", {
   { fn = "set",      sig = "(pos, name|false)",             doc = "record an observation by hand" },
   { fn = "summary",  sig = "(near?, limit?) -> string" },
   { fn = "save",     sig = "() -> ok" },
+  { fn = "isStale",  sig = "(p) -> bool",                   doc = "an old observation is advisory; go and look before acting on it" },
 })
 
 registry.add("geom", geom, "coordinate helpers (pure math, no server calls)", {

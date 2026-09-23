@@ -613,6 +613,87 @@ ok(situation:find("bread", 1, true) == nil,
    "and does not describe what was taken out", situation)
 
 --------------------------------------------------------------------------
+group("a wall with a hole in it")
+
+-- "Build a 3x3 wall" produced eight blocks and one gap: placed = 8,
+-- skipped = 1, nothing unreachable. The skipped cell was one world memory
+-- claimed was already solid. Memory is a record of a moment; a fill that
+-- trusts it leaves exactly that hole when the moment has passed.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+inv.invalidate()
+world.set({ x = 0, y = 64, z = -1 }, "minecraft:cobblestone")   -- but not really
+
+local placed, skipped, info = block.fill({ x = 0, y = 64, z = -1 },
+                                         { x = 0, y = 64, z = -1 },
+                                         "minecraft:cobblestone")
+ok(placed == 1, "a cell memory calls solid is filled anyway", placed)
+ok(mock.get(0, 64, -1) == "minecraft:cobblestone", "and the block is really there",
+   tostring(mock.get(0, 64, -1)))
+ok(skipped == 0, "nothing was skipped on a belief", skipped)
+
+-- A cell that really is occupied is still skipped -- but because the
+-- turtle looked, not because it remembered.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+inv.invalidate()
+mock.set(0, 64, -1, "minecraft:stone")
+placed, skipped, info = block.fill({ x = 0, y = 64, z = -1 },
+                                   { x = 0, y = 64, z = -1 },
+                                   "minecraft:cobblestone")
+ok(placed == 0 and skipped == 1, "an occupied cell is skipped",
+   placed .. "/" .. skipped)
+ok(info.unplaceable == 0, "and is not reported as a failure", info.unplaceable)
+ok(world.isSolid({ x = 0, y = 64, z = -1 }) == true,
+   "with memory corrected from what it saw")
+
+-- The cheap path is still available for jobs big enough to need it.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+inv.invalidate()
+world.set({ x = 0, y = 64, z = -1 }, "minecraft:cobblestone")   -- again a lie
+placed, skipped = block.fill({ x = 0, y = 64, z = -1 }, { x = 0, y = 64, z = -1 },
+                             "minecraft:cobblestone", { trustMemory = true })
+ok(placed == 0 and skipped == 1, "trustMemory skips on the record",
+   placed .. "/" .. skipped)
+
+-- ...but only while the record is fresh.
+fresh()
+mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 64 }
+inv.invalidate()
+world.set({ x = 0, y = 64, z = -1 }, "minecraft:cobblestone")
+local keepStale = world.staleAfter
+world.staleAfter = -1                            -- everything is now old
+placed, skipped = block.fill({ x = 0, y = 64, z = -1 }, { x = 0, y = 64, z = -1 },
+                             "minecraft:cobblestone", { trustMemory = true })
+world.staleAfter = keepStale
+ok(placed == 1, "a stale record is checked even then", placed)
+
+--------------------------------------------------------------------------
+group("memory belongs to the frame it was recorded in")
+
+-- Without GPS, coordinates are local to wherever the turtle booted. Break
+-- it and put it down again and the same keys name different blocks, so
+-- every remembered observation is now a claim about somewhere else.
+fresh()
+world.set({ x = 5, y = 64, z = 5 }, "minecraft:diamond_ore")
+ok(world.isSolid({ x = 5, y = 64, z = 5 }) == true, "remembered")
+
+ok(world.useFrame("local:1:aaa") == false, "the first frame seen is just recorded")
+ok(world.isSolid({ x = 5, y = 64, z = 5 }) == true, "and changes nothing")
+
+ok(world.useFrame("local:1:bbb"), "a different frame drops the memory")
+ok(world.isSolid({ x = 5, y = 64, z = 5 }) == nil,
+   "so nothing is claimed about coordinates that moved")
+
+-- GPS frames are mutually consistent, which is the point of having GPS.
+fresh()
+world.useFrame("gps")
+world.set({ x = 5, y = 64, z = 5 }, "minecraft:diamond_ore")
+ok(world.useFrame("gps") == false, "the same frame keeps everything")
+ok(world.isSolid({ x = 5, y = 64, z = 5 }) == true, "memory survives", nil)
+
+--------------------------------------------------------------------------
 group("a fill that placed nothing has to say why")
 
 -- Nine cells came back as "placed = 0, skipped = 2" and the turtle did

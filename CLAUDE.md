@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-415 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+433 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. Every bug this project has
 actually shipped was the kind this catches — facing math, path replanning,
 sandbox leaks, nesting hazards. If you touched `agent/` or `claude/`, run it
@@ -132,6 +132,15 @@ Nothing should come back but `noreply@anthropic.com`.
   turtle that happened to boot facing a wall. `caps.summary` still has a
   `dig?` branch for unknown; if it can never fire again, something has
   re-collapsed the two answers.
+- World memory is a record of moments, not a description of the world.
+  `agent/world.lua` entries carry a timestamp and belong to a coordinate
+  frame; acting on one without checking either is how a wall gets a hole
+  in it (`block.fill` skipped a cell memory called solid) and how a
+  re-placed turtle reasons about somebody else's blocks. Read `isStale`
+  before trusting an observation, and remember that without GPS the
+  coordinates themselves are only meaningful within one frame —
+  `world.useFrame` drops the memory when that changes, and is called at
+  the same boundaries as the other invalidations.
 - Where the game can be asked, ask it. A hardcoded list of what counts as
   fuel, what a recipe looks like, or which upgrades exist is a list that is
   wrong on somebody's modpack — and wrong silently, as "this turtle has no
