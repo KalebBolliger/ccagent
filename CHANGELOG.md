@@ -8,6 +8,38 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- A 9x9 floor that placed all 81 blocks reported `fill incomplete:
+  unknown reason`. `block.fill` initialised `info.unreachable` and
+  `info.unplaceable` to 0 and `claude/prompt.lua` instructed the model to
+  warn "if info.unreachable ... is set" — but zero is true in Lua, so
+  that check fired on every successful run. The test covering it asserted
+  `info.unplaceable == 0` and passed, because it was written from the
+  same assumption as the bug. Same shape as the `frame` mistake in 1.1.0,
+  and the second time it has cost a release.
+
+  Failure counts are now absent when the failure did not happen, so the
+  documented check is correct as written and already-saved programs are
+  fixed without being regenerated. `info.complete` states the answer
+  outright. Arithmetic on the counts needs `or 0` — the cheaper mistake,
+  since it crashes loudly rather than misreporting quietly.
+
+**Added**
+
+- `block.till(dir, opts)`. A wheat farm reported "Tilled 0" after
+  equipping a hoe and walking the whole grid, because the generated
+  program used `turtle.placeDown()` to till. Nothing could have made that
+  work: `place` puts down the item in the selected inventory slot and
+  never involves the equipped tool. In CC:Tweaked tilling goes through
+  `turtle.dig*`, because `TurtleTool.dig` asks the tool whether it has a
+  use for the block and performs that instead of breaking it. That is not
+  guessable from the API surface, which is exactly what the capability
+  library is for.
+
+  The same call breaks a block the tool has no use for, so `block.till`
+  looks before and after and reports "broke X instead of tilling it"
+  rather than counting a hole in the floor as success.
+
+
 - With the timeout gone, the same large job failed as `response hit
   max_tokens before producing any text`. The message was accurate and its
   advice was wrong, because the code behind it assumed thinking was off

@@ -84,10 +84,19 @@ HOW TO WRITE GOOD TURTLE CODE
   incapable, and check that a refuel actually worked before moving on.
 - Narrate with job.say() at meaningful milestones, not every block.
 - block.fill and block.clear return an `info` table after their counts.
-  If info.unreachable or info.stopped is set, the job did not do what was
-  asked and info.reason says why -- put it in the report and warn. A
+  `info.complete` is the answer: false means the job did not do what was
+  asked and info.reason says why -- put it in the report and warn. Keys
+  like info.unreachable are absent when nothing went wrong, and are
+  counts when it did, so `(info.unreachable or 0)` for arithmetic. Do not
+  test a count for truthiness to decide whether something failed: zero is
+  true in Lua, so `if info.unreachable then` fires on a perfect run. A
   report of "placed 0" with no explanation is the least useful thing a
   program can produce.
+- To turn ground into farmland, use block.till("down") with a hoe
+  equipped. turtle.place/placeDown puts down an item from the selected
+  inventory slot and never uses the equipped tool, so it cannot till --
+  it just silently does nothing. Seeds only plant on farmland, so till
+  first, then block.place("down", "wheat_seeds").
 - Finish with job.report(...) carrying the result: a count, a list of
   positions, a summary table. The operator sees it and it becomes context
   for their follow-up request.

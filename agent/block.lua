@@ -302,6 +302,83 @@ end
 --- opts.giveUpAfter  consecutive failures before stopping (default 3);
 ---                   a turtle that cannot reach the first three cells is
 ---                   not going to reach the next five hundred.
+--- Make an `info` table safe to read the obvious way.
+---
+--- Zero is TRUE in Lua. A caller writing `if info.unreachable then` --
+--- which is what this library's own documentation told them to write --
+--- fires on every successful run, because the counter was initialised to
+--- 0 and stayed there. Reporting a completed 9x9 as "fill incomplete" is
+--- exactly that bug. So a failure count that never happened is not
+--- present at all, and `complete` states the answer outright rather than
+--- leaving it to be inferred from a number's truthiness.
+--- Till the ground with an equipped hoe (or flatten it with a shovel).
+---
+--- Non-obvious enough to be worth a capability rather than leaving every
+--- generated program to guess: in CC:Tweaked a hoe does NOT till through
+--- turtle.place*. `place` puts down the item in the selected inventory
+--- slot; the equipped tool is not involved. Tilling happens through
+--- `turtle.dig*`, because TurtleTool.dig checks the tool for a
+--- use-on-block action and performs that instead of breaking. A program
+--- reaching for placeDown() to till -- the obvious guess -- silently
+--- does nothing, which is exactly what happened to a 9x9 wheat farm that
+--- reported "Tilled 0".
+---
+--- The same call breaks the block when the tool has no use for it, so
+--- this looks before and after and says which happened rather than
+--- reporting a hole in the ground as success.
+---   opts.side   "left" | "right", when both sides carry a tool
+--- Returns ok, err, info {before, after}.
+function block.till(dir, opts)
+  opts = opts or {}
+  dir = dir or "down"
+  if not _G.turtle then return false, "not a turtle" end
+
+  local before = block.inspect(dir)
+  if not before then
+    return false, "nothing there to till", { before = nil }
+  end
+  if before.name and before.name:find("farmland", 1, true) then
+    return true, nil, { before = before.name, after = before.name,
+                        alreadyTilled = true }
+  end
+
+  local api = API[({ up = "up", down = "down" })[tostring(dir):lower()] or "x"]
+  local ok
+  if api then
+    ok = api.dig(opts.side)
+  else
+    -- A horizontal direction has to be faced first, which orient() does.
+    local a, _, restore, err = orient(dir)
+    if not a then return false, err end
+    ok = a.dig(opts.side)
+    if restore then restore() end
+  end
+
+  local after = block.inspect(dir)
+  local info = { before = before.name, after = after and after.name or nil }
+  if not after then
+    -- The tool had no use for it, so dig did what dig does.
+    return false, ("broke %s instead of tilling it -- that tool has no "
+                .. "use for that block"):format(tostring(before.name)), info
+  end
+  if after.name ~= before.name then return true, nil, info end
+  return false, ("%s did not change -- is a hoe equipped?")
+    :format(tostring(before.name)), info
+end
+
+function block.settle(info)
+  local failed = false
+  for _, k in ipairs({ "unreachable", "unplaceable" }) do
+    if info[k] == 0 then
+      info[k] = nil
+    elseif info[k] then
+      failed = true
+    end
+  end
+  info.complete = not failed and not info.stopped
+  return info
+end
+
 function block.fill(cornerA, cornerB, spec, opts)
   opts = opts or {}
   local placed, skipped = 0, 0
@@ -364,7 +441,7 @@ function block.fill(cornerA, cornerB, spec, opts)
       break
     end
   end
-  return placed, skipped, info
+  return placed, skipped, block.settle(info)
 end
 
 --- Clear a box of blocks. The quarry/excavation primitive.
@@ -404,7 +481,7 @@ function block.clear(cornerA, cornerB, opts)
       break
     end
   end
-  return dug, info
+  return dug, block.settle(info)
 end
 
 --------------------------------------------------------------- entities ---

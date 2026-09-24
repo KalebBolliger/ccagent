@@ -643,7 +643,15 @@ placed, skipped, info = block.fill({ x = 0, y = 64, z = -1 },
                                    "minecraft:cobblestone")
 ok(placed == 0 and skipped == 1, "an occupied cell is skipped",
    placed .. "/" .. skipped)
-ok(info.unplaceable == 0, "and is not reported as a failure", info.unplaceable)
+-- Not `== 0`. Zero is true in Lua, so a caller doing the documented
+-- `if info.unplaceable then` would have seen a failure that never
+-- happened -- which is how a finished 9x9 floor reported itself as
+-- "fill incomplete". The absence of the key is the contract.
+ok(info.unplaceable == nil, "and is not reported as a failure",
+   tostring(info.unplaceable))
+ok(info.complete == true, "a run with nothing wrong says so outright")
+ok(not (info.unreachable or info.unplaceable or info.stopped),
+   "and the documented truthiness check stays quiet")
 ok(world.isSolid({ x = 0, y = 64, z = -1 }) == true,
    "with memory corrected from what it saw")
 
@@ -712,10 +720,15 @@ ok(placed == 0, "nothing was placed", placed)
 ok(info ~= nil, "and there is a third return value that says so")
 ok(info.unreachable > 0, "counting the cells it could not reach",
    info and info.unreachable)
-ok(placed + skipped + info.unreachable + info.unplaceable == info.cells,
+-- Absent means zero, so arithmetic on these needs `or 0`. That is the
+-- price of making the truthiness check correct, and it is the cheaper
+-- mistake: this one crashes loudly instead of misreporting quietly.
+ok(placed + skipped + (info.unreachable or 0) + (info.unplaceable or 0)
+     == info.cells,
    "so the numbers add up to the cells it looked at",
-   info and (placed .. "+" .. skipped .. "+" .. info.unreachable ..
-             "+" .. info.unplaceable .. " vs " .. info.cells))
+   info and (placed .. "+" .. skipped .. "+" .. tostring(info.unreachable) ..
+             "+" .. tostring(info.unplaceable) .. " vs " .. info.cells))
+ok(info.complete == false, "and a run that reached nothing is incomplete")
 ok(info.reason and #info.reason > 0, "with a reason worth reporting",
    info and info.reason)
 
@@ -741,7 +754,8 @@ placed, skipped, info = block.fill({ x = 0, y = 64, z = -2 },
                                    { x = 0, y = 64, z = -2 },
                                    "minecraft:cobblestone")
 ok(placed == 1, "one cell, one block", placed)
-ok(not info.stopped and info.unreachable == 0, "nothing to explain")
+ok(info.complete == true and not info.stopped and not info.unreachable,
+   "nothing to explain")
 
 -- block.clear had the same hole.
 fresh()
@@ -1252,6 +1266,76 @@ do
      "and does not ask for a stream")
 end
 mock.resetHttp()
+
+--------------------------------------------------------------------------
+group("till: the hoe goes through dig, not place")
+fresh()
+do
+  -- This is the whole point of the capability. A program that reaches for
+  -- placeDown() to till gets silence: place puts down an inventory item
+  -- and never touches the equipped tool.
+  mock.set(0, 63, 0, "minecraft:dirt")
+  mock.turtle.slots[1] = { name = "minecraft:diamond_hoe", count = 1 }
+  inv.invalidate()
+  ok(inv.equip("*hoe"), "hoe equipped")
+
+  turtle.select(1)
+  local placedOk = turtle.placeDown()
+  ok(not placedOk, "placeDown does not till -- it is not a tool action")
+  ok(mock.get(0, 63, 0) == "minecraft:dirt", "the ground is untouched")
+
+  local ok1, err1, info1 = block.till("down")
+  ok(ok1, "block.till turns dirt into farmland", err1)
+  ok(mock.get(0, 63, 0) == "minecraft:farmland", "in the world",
+     mock.get(0, 63, 0))
+  ok(info1.before == "minecraft:dirt" and info1.after == "minecraft:farmland",
+     "and says what it changed")
+
+  -- Tilling what is already farmland is a no-op success, not a re-dig.
+  local ok2, _, info2 = block.till("down")
+  ok(ok2 and info2.alreadyTilled, "already-tilled ground is left alone")
+
+  -- The same call breaks a block the tool has no use for. Saying "tilled"
+  -- when you have punched a hole in someone's floor is the failure that
+  -- matters, so it must come back false and name what happened.
+  mock.set(0, 63, 0, "minecraft:stone")
+  local ok3, err3, info3 = block.till("down")
+  ok(not ok3, "a block the hoe cannot till is not reported as tilled")
+  ok(tostring(err3):find("broke", 1, true) ~= nil,
+     "and the error says it was broken", err3)
+  ok(info3.before == "minecraft:stone", "naming what was lost", info3.before)
+
+  -- Nothing below at all.
+  mock.set(0, 63, 0, nil)
+  local ok4, err4 = block.till("down")
+  ok(not ok4 and tostring(err4):find("nothing", 1, true) ~= nil,
+     "tilling air fails cleanly", err4)
+end
+
+--------------------------------------------------------------------------
+group("fill info: a count of zero must not read as a failure")
+fresh()
+do
+  -- The whole 3x1x1 run succeeds: nothing unreachable, nothing unplaceable.
+  mock.turtle.slots[1] = { name = "minecraft:dirt", count = 64 }
+  inv.invalidate()
+  local placed, skipped, info = block.fill({ x = 1, y = 64, z = 0 },
+                                           { x = 3, y = 64, z = 0 },
+                                           "minecraft:dirt")
+  ok(placed == 3, "every cell was placed", placed)
+  ok(info.complete == true, "so the run is complete")
+  ok(info.unreachable == nil and info.unplaceable == nil,
+     "and no failure key is present to trip a truthiness test")
+  ok(info.reason == nil, "with no reason to report")
+
+  -- And the keys still appear, as numbers, when they mean something.
+  local i2 = block.settle({ cells = 9, unreachable = 2, unplaceable = 0 })
+  ok(i2.unreachable == 2, "a real count survives", i2.unreachable)
+  ok(i2.unplaceable == nil, "alongside one that did not happen")
+  ok(i2.complete == false, "and the run is not complete")
+  ok(block.settle({ cells = 1, unreachable = 0, stopped = true }).complete == false,
+     "giving up early is incomplete even with no failed cells")
+end
 
 --------------------------------------------------------------------------
 group("thinking: the tokens spent before a program is written")

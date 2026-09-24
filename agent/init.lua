@@ -175,6 +175,7 @@ registry.add("block", block, "look at, break, place and hit blocks in any direct
   { fn = "dig",      sig = "(dir, opts?) -> ok, err",       doc = "opts: only=pattern, repeatWhileFalling, force" },
   { fn = "digVein",  sig = "(pattern, opts?) -> n, err",    doc = "flood-fill mine a connected vein, then return" },
   { fn = "place",    sig = "(dir, spec?, opts?) -> ok, err", doc = "spec is an item spec; opts: replace, text" },
+  { fn = "till",     sig = "(dir, opts?) -> ok, err, info",  doc = "hoe the ground into farmland (or shovel a path). NOT place -- place puts down an inventory item and never uses the equipped tool" },
   { fn = "fill",     sig = "(a, b, spec, opts?) -> placed, skipped, info", doc = "fill a box; checks each cell rather than trusting memory; info explains anything not placed" },
   { fn = "clear",    sig = "(a, b, opts?) -> dug, info",    doc = "excavate a box; info explains anything not dug" },
   { fn = "attack",   sig = "(dir, opts?) -> hits",          doc = "opts: times, delay" },

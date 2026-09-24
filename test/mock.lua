@@ -84,12 +84,36 @@ function turtle.inspect()     return inspect("forward") end
 function turtle.inspectUp()   return inspect("up") end
 function turtle.inspectDown() return inspect("down") end
 
+-- What a hoe does to what. CC:Tweaked's TurtleTool.dig asks the tool
+-- whether it has a use for the block and performs that INSTEAD of
+-- breaking it, which is why tilling goes through dig and not place.
+mock.toolUse = {
+  ["minecraft:diamond_hoe"] = {
+    ["minecraft:dirt"]       = "minecraft:farmland",
+    ["minecraft:grass_block"] = "minecraft:farmland",
+  },
+  ["minecraft:diamond_shovel"] = {
+    ["minecraft:grass_block"] = "minecraft:dirt_path",
+  },
+}
+
 local function dig(dir)
   if not T.hasTool then return false, "No tool to dig with" end
   local x, y, z = posFor(dir)
   local n = W[key(x, y, z)]
   if not n then return false, "Nothing to dig here" end
   if n == "minecraft:bedrock" then return false, "Unbreakable block detected" end
+
+  -- Tool use comes first, and consumes the dig without dropping loot.
+  local eq = T.equipped or {}
+  for _, side in ipairs({ "left", "right" }) do
+    local uses = eq[side] and mock.toolUse[eq[side]]
+    if uses and uses[n] then
+      W[key(x, y, z)] = uses[n]
+      return true
+    end
+  end
+
   W[key(x, y, z)] = nil
   -- loot goes to the first slot that fits
   for i = 1, 16 do
@@ -233,10 +257,16 @@ local function equip(side)
     return true
   end
 
-  if held.name ~= "minecraft:crafting_table"
-     and not held.name:find("pickaxe") and not held.name:find("modem") then
-    return false, "Not a valid upgrade"
+  -- CC:Tweaked registers every vanilla tool as a turtle upgrade, not just
+  -- the pickaxe. The old list here said otherwise, which made a hoe
+  -- impossible to equip in tests while working fine in the game.
+  local UPGRADES = { "pickaxe", "axe", "shovel", "hoe", "sword",
+                     "modem", "crafting_table" }
+  local valid = false
+  for _, u in ipairs(UPGRADES) do
+    if held.name:find(u, 1, true) then valid = true; break end
   end
+  if not valid then return false, "Not a valid upgrade" end
 
   if held.count > 1 then
     held.count = held.count - 1
