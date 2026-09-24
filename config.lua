@@ -39,6 +39,13 @@ return {
   --   Never dig above y=70 near the base.
   -- ]],
 
+  -- /share posts the last run (state, program, output, log tail) to this
+  -- and prints the url it answers with, so a failure can be read off the
+  -- turtle instead of transcribed from a 39x13 screen. Anything that
+  -- takes a POST body and returns a url will do. Whatever you point it
+  -- at is PUBLIC, and the report includes your coordinates.
+  -- shareUrl = "https://paste.rs",
+
   protocol = "ccagent",              -- rednet protocol for host/worker mode
   hostname = "ccagent-host",
 

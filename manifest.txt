@@ -39,6 +39,7 @@ claude/config.lua
 
 ui/console.lua
 ui/jobs.lua
+ui/share.lua
 ui/net.lua
 ui/controller.lua
 ui/worker.lua

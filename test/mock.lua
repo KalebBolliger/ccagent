@@ -513,6 +513,16 @@ end
 
 local http = {}
 
+--- Blocking POST, as ui/share.lua uses. Shares the scripted-reply queue.
+function http.post(url, body, headers)
+  mock.http.requests[#mock.http.requests + 1] =
+    { url = url, body = body, headers = headers, method = "POST" }
+  local r = table.remove(mock.http.replies, 1)
+  if not r then return nil, "no reply scripted" end
+  if r.failure then return nil, r.failure, r.status and handleFor(r) or nil end
+  return handleFor(r)
+end
+
 function http.request(opts)
   mock.http.requests[#mock.http.requests + 1] = opts
   local r = table.remove(mock.http.replies, 1)

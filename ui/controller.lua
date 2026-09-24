@@ -94,6 +94,8 @@ local HELP = {
   "/forget         wipe world memory and pose",
   "/stats          token usage this session",
   "/doctor         version, transport, one test call",
+  "/share          post the last run somewhere readable",
+  "/update         pull the latest code, then reboot",
   "/exit",
 }
 
@@ -375,6 +377,51 @@ local function command(input, ctx)
       console.say(("ok, %.1fs"):format(took))
     else
       console.err(tostring(err))
+    end
+
+  elseif cmd == "share" then
+    -- A 39x13 screen with no scrollback loses the evidence before it can
+    -- be read. Post it somewhere instead of transcribing it.
+    local share = require("ui.share")
+    if not cfg.shareUrl or cfg.shareUrl == "" then
+      console.warn("set shareUrl in /ccagent/config.lua")
+      console.dim("anything that takes a POST and")
+      console.dim("answers with a url")
+    else
+      local st = require("claude.client").settings(cfg)
+      local text = share.gather({
+        sess = sess, lastRequest = ctx.lastRequest,
+        version = agent.VERSION, logFile = cfg.logFile,
+        situation = agent.situation(),
+        settings = ("%s %d tok effort %s"):format(st.model, st.maxTokens,
+                                                  st.effort),
+      })
+      if share.carriesSecret(text, cfg.apiKey) then
+        console.err("report contains the api key; not sent")
+        return true
+      end
+      -- This publishes. Say so, and say how much, before doing it.
+      console.info(("%d chars, incl. your position"):format(#text))
+      local yn = console.ask("post it publicly? [y/N] ")
+      if yn and yn:lower():sub(1, 1) == "y" then
+        console.status("posting...")
+        local where, err = share.post(cfg.shareUrl, text)
+        if where then console.say(where) else console.err(tostring(err)) end
+      end
+    end
+
+  elseif cmd == "update" then
+    if not _G.shell then
+      console.warn("no shell; run ccagent update")
+    else
+      local yn = console.ask("pull and reboot? [y/N] ")
+      if yn and yn:lower():sub(1, 1) == "y" then
+        -- boot is all-or-nothing, so a failed pull leaves this install
+        -- intact and the reboot just restarts what was already here.
+        shell.run("/ccagent/boot.lua")
+        console.status("rebooting...")
+        os.reboot()
+      end
     end
 
   elseif cmd == "exit" or cmd == "quit" then

@@ -6,6 +6,29 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Added**
+
+- `/share` and `/update`, which together remove the slowest part of
+  working on this: a turtle on a server that has to be debugged from
+  somewhere else. A 39x13 screen with no scrollback loses the generated
+  source, the output before the error and the turtle's own view of the
+  world before any of it can be read, so a failure had to be transcribed
+  by hand — slowly, and dropping the detail that decided between two
+  explanations.
+
+  `/share` bundles all of it, plus the tail of `/.ccagent/log.txt`, and
+  POSTs it to whatever `shareUrl` is set to, printing the url that comes
+  back. Any sink that takes a POST body and answers with a url works. None
+  ships as a default: picking a service for the operator picks who
+  receives their coordinates. It says how much it is about to publish and
+  asks first, and refuses if the text contains the API key — which it
+  cannot today, since the bundle is not built from config, which is
+  precisely why the check is worth keeping for the day it is.
+
+  `/update` pulls and reboots without leaving the controller. `boot` is
+  all-or-nothing, so a failed pull leaves the install intact.
+
+
 **Documentation**
 
 - `README.md` now says what this is an experiment in: whether enough

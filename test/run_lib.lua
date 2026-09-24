@@ -776,6 +776,57 @@ do
 end
 
 --------------------------------------------------------------------------
+group("share: getting a failure off a screen with no scrollback")
+do
+  local share = require("ui.share")
+
+  local text = share.bundle({
+    version = "1.2.0", situation = "at 0,64,0",
+    request = "build a wall", code = "job.report(1)",
+    result = { ok = false, error = "boom", output = "line one" },
+  })
+  -- The point is that everything needed to tell two explanations apart
+  -- survives in one place, since none of it survives on the screen.
+  for _, want in ipairs({ "1.2.0", "at 0,64,0", "build a wall",
+                          "job.report(1)", "boom", "line one" }) do
+    ok(text:find(want, 1, true) ~= nil, "bundle carries " .. want)
+  end
+
+  -- Missing pieces are omitted, not rendered as "nil".
+  local sparse = share.bundle({ version = "1.2.0" })
+  ok(sparse:find("nil", 1, true) == nil, "an empty bundle prints no nils",
+     sparse)
+  ok(#sparse > 0, "and is still something")
+
+  -- Whatever else changes, the key must never leave the turtle.
+  ok(share.carriesSecret("x sk-ant-secret y", "sk-ant-secret"),
+     "a key in the text is detected")
+  ok(not share.carriesSecret(text, "sk-ant-secret"),
+     "and a clean bundle passes")
+  ok(not share.carriesSecret(text, ""), "an unset key is not a match for "
+     .. "everything -- that would block every report")
+
+  -- Posting.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = "https://example.invalid/abc\n" })
+  local where, err = share.post("https://sink.invalid", text)
+  ok(where == "https://example.invalid/abc", "the sink's url is returned", err)
+  ok(mock.http.requests[1].body:find("boom", 1, true) ~= nil,
+     "and the bundle is what was sent")
+
+  mock.resetHttp()
+  ok(select(2, share.post("", text)):find("no sink", 1, true) ~= nil,
+     "an unconfigured sink is refused before any request")
+  ok(#mock.http.requests == 0, "with nothing sent")
+
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = "   " })
+  local w2, e2 = share.post("https://sink.invalid", text)
+  ok(w2 == nil and tostring(e2):find("nothing", 1, true) ~= nil,
+     "a sink that answers with nothing is an error, not a blank url", e2)
+end
+
+--------------------------------------------------------------------------
 group("revise: showing what changed, not the whole program")
 do
   local util = require("agent.util")

@@ -310,6 +310,8 @@ Anything that is not a slash command is a request.
 | `/model [id]` | show or change the model |
 | `/stats` | token usage, including cache hits |
 | `/doctor` | version, transport settings, and one live test request |
+| `/share` | post the last run somewhere you can read it |
+| `/update` | pull the latest code and reboot |
 
 Press **Q** while a job runs to ask it to stop at the next checkpoint; press it
 again to force.
@@ -495,6 +497,30 @@ should handle `inventory` unless the request makes clear the turtle is carrying
 exactly the ingredients. Aborting with a clear report is a perfectly good
 answer; silently failing is not.
 
+### Debugging a turtle you are not sitting next to
+
+A CC terminal is 39x13 with no scrollback, so by the time a program
+misbehaves the evidence that would distinguish two explanations — the
+generated source, the output before the error, what the turtle believed
+about the world — has already scrolled away. Transcribing it by hand is
+slow and drops exactly the detail that mattered.
+
+`/share` bundles the last run (state, request, program, output, error, and
+the tail of `/.ccagent/log.txt`) and POSTs it to whatever you set
+`shareUrl` to, printing the url the sink answers with. Any service that
+takes a POST body and returns a url works — `https://paste.rs` and
+`https://0x0.st` both do.
+
+No sink ships as a default, because choosing one for you chooses who
+receives your coordinates. **What you post is public**, and the report
+includes the turtle's position; `/share` says how much it is about to send
+and asks before sending. It refuses outright if the text somehow contains
+your API key.
+
+`/update` closes the other half of the loop: pull the current code and
+reboot, without leaving the controller. The pull is all-or-nothing, so a
+failed one leaves the install untouched.
+
 ## Cost control
 
 - **Keep `cache = true`.** It is most of the savings. `/stats` shows cache
@@ -563,7 +589,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 515
+`lua5.3 test/all.lua` runs the three suites against a mock world — 531
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
