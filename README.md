@@ -22,6 +22,26 @@ done in 94.2s
 
 ---
 
+## What this is trying to find out
+
+Writing CC:Tweaked programs normally means stopping, opening an editor, and
+writing Lua. That is fine when you are alone with an afternoon. It is
+awkward on a multiplayer server, where the job you want automated shows up
+in the middle of doing something else, and the person who wants it is often
+not the person who writes Lua.
+
+So this is an experiment, and the question is whether enough prebuilt
+infrastructure makes a turtle usable **on the fly**: describe the job in a
+sentence, watch it run, keep it if it worked. If that holds, automation
+stops being gated on somebody sitting out the session in an editor, and
+someone who has never written Lua can still contribute a routine the rest
+of the server uses.
+
+Whether it holds is genuinely open. `docs/ARCHITECTURE.md` keeps a list of
+the premises this design rests on that have not been measured — starting
+with whether the manifest actually beats an unassisted model, which is the
+founding assumption and has never been A/B'd.
+
 ## The idea
 
 The expensive part of an LLM-driven turtle is not the thinking, it is the
@@ -37,10 +57,13 @@ not grow with the number of requests. What varies per request is one short
 state line and your sentence.
 
 ```
-system prompt : ~2,700 tokens, cached     (rules + API manifest + examples)
+system prompt : ~4,400 tokens, cached     (rules + API manifest + examples)
 per request   : ~60 tokens of live state + your sentence
-per response  : usually 150-400 tokens of Lua
+per response  : the program, plus whatever the model spent thinking first
 ```
+
+`/manifest` prints the real figure for your build; the manifest itself is
+about 1,800 of those tokens and grows as capabilities are added.
 
 The library is also where correctness lives. Position tracking survives
 reboots, the pathfinder remembers walls it has bumped into, protected blocks
@@ -278,11 +301,15 @@ Anything that is not a slash command is a request.
 | `/register <name>` | make a saved program callable by Claude |
 | `/expose <name> on\|off` | show or hide it in the prompt |
 | `/unregister <name>` / `/check <name>` | revoke it; lint it without registering |
+| `/revise <name> [note]` | rewrite a saved program against the current API |
+| `/jobs [name]` / `/del <name>` | list saved programs, or describe one; delete one |
 | `/dry <request>` | generate a program without running it |
 | `/notes <text>` | house rules appended to the system prompt |
 | `/calibrate`, `/sethome`, `/home`, `/refuel` | housekeeping |
-| `/reset` | forget the conversation (world memory survives) |
+| `/reset` / `/forget` | forget the conversation; wipe world memory and pose |
+| `/model [id]` | show or change the model |
 | `/stats` | token usage, including cache hits |
+| `/doctor` | version, transport settings, and one live test request |
 
 Press **Q** while a job runs to ask it to stop at the next checkpoint; press it
 again to force.
@@ -422,6 +449,7 @@ block.clear(a, b, {dumpWhenFull=fn})  -- excavate a box
 block.fill(a, b, "*_planks")          -- build one
 inv.count({tag="minecraft:logs"})     -- tag- and glob-aware matching
 inv.craft({{"wheat","wheat","wheat"}}) -- equips a carried table, spreads surplus
+block.till("down")                    -- hoe the ground (hover two above it)
 world.find("*chest*", {near=nav.pos()})  -- answered from memory, zero server calls
 helper.roundTrip(fn)                  -- always end up where you started
 ```
@@ -429,6 +457,17 @@ helper.roundTrip(fn)                  -- always end up where you started
 Scripts run in a sandbox: no `fs`, no `http`, no `shell`, no `require`. The raw
 `turtle` table is available as an escape hatch, but its movement functions are
 rerouted through `nav` so position tracking cannot desync.
+
+Two of these do something the raw `turtle` API cannot be talked into doing,
+and are worth knowing about before you reimplement them badly:
+
+- **Tilling goes through `dig`, not `place`.** `turtle.place` puts down the
+  item in the selected slot and never touches the equipped tool. CC:Tweaked
+  offers a block to the tool inside `dig`, so a hoe tills there.
+- **A turtle cannot till the ground it stands on.** Nothing with a block
+  above it can be tilled, and the turtle is a block. Hover two above the
+  floor — `block.till("down")` then `block.place("down", seeds)` both work
+  from that one position, so a farm is a single pass.
 
 ### Crafting has a failure mode worth handling
 
@@ -467,12 +506,22 @@ answer; silently failing is not.
 - The saved-routine index lives in the **cached** prefix, not the per-request
   state line — it's stable between registrations, so putting it in the live
   block would mean paying full price for it on every request forever. At
-  ~15 tokens per listed routine, fifty of them add ~750 to a ~3,500-token
+  ~15 tokens per listed routine, fifty of them add ~750 to a ~4,400-token
   prefix. You will find scrolling `/jobs` annoying long before the tokens
   matter, which makes `/expose` a curation tool more than a cost one.
-- `thinking` is off by default. Most turtle jobs do not need it and it triples
-  latency. Turn it on in `config.lua` for genuinely hard planning.
+- **Thinking is on by default, and it is spent out of `maxTokens`.** Current
+  models think unless told not to; omitting the setting asks for the default,
+  and the default is on. A budget too small for it fails as `max_tokens with
+  no text` — the program was never started, not truncated. `effort`
+  (`low`..`max`, default `medium`) is the knob for what that costs; reach for
+  it before `thinking = "off"`, since the programs are better with it.
+- **`config.lua` is kept across updates**, so a turtle installed a while ago
+  is still running the defaults it was installed with. `boot` says when the
+  shipped file has changed; `/doctor` prints what is actually in force.
 - `maxRepairs` (default 2) bounds the automatic fix loop.
+- Responses are streamed. This is not optional in practice: CC:Tweaked kills
+  a connection that goes 30s without bytes, and a non-streaming request is
+  silent for the whole generation, so long jobs died as `Timed out`.
 
 ## Extending
 
@@ -514,12 +563,18 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 433
+`lua5.3 test/all.lua` runs the three suites against a mock world — 515
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
-abort survival, and the bootstrapper. Run it before shipping a change; it catches the class of bug that is
-miserable to debug in-game.
+abort survival, the API transport, and the bootstrapper. Run it before
+shipping a change.
+
+It catches the class of bug that is miserable to debug in-game. It does not
+catch a wrong belief about what CC:Tweaked or Minecraft does, because
+`test/mock.lua` encodes the same belief — several bugs have shipped with a
+passing test that agreed with them. `CLAUDE.md` explains the loop that
+works when the game and the tests disagree.
 
 ## Where this is going
 

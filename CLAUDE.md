@@ -18,11 +18,32 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-433 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
-under a second, with no Minecraft required. Every bug this project has
-actually shipped was the kind this catches — facing math, path replanning,
-sandbox leaks, nesting hazards. If you touched `agent/` or `claude/`, run it
-before saying you're finished, not just when something seems wrong.
+515 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+under a second, with no Minecraft required. If you touched `agent/` or
+`claude/`, run it before saying you're finished, not just when something
+seems wrong.
+
+**Know what it does and does not prove.** It is good at regressions in
+things we already understand: facing math, path replanning, sandbox leaks,
+nesting hazards, contract parsing. It is worthless against a wrong belief
+about what CC:Tweaked or Minecraft actually does, because `test/mock.lua`
+encodes the same belief. Every one of these shipped green:
+
+- `block.fill` reported *every* successful fill as incomplete. Zero is
+  truthy in Lua; the test asserted `info.unplaceable == 0` and passed.
+- `block.till` could not work in any situation. The tests stood the turtle
+  on the block being tilled — the one geometry Minecraft forbids.
+- the `frame` lint in 1.1.0, whose tests were written from the same wrong
+  premise as the rule (`CHANGELOG.md`).
+
+So when the game disagrees with the tests, **fix the mock first** and watch
+the existing tests fail. A green suite after a correction to
+`test/mock.lua` means something; a green suite after a change to `agent/`
+alone only means you did not break what was already understood.
+
+(That count is checked. `test/all.lua` fails if this file or `README.md`
+quotes a number that is no longer true — a figure cited as evidence and
+left to rot makes every claim near it look equally unmaintained.)
 
 ## Deployment target is NOT the interpreter you're testing with
 
@@ -151,6 +172,24 @@ Nothing should come back but `noreply@anthropic.com`.
   coordinates themselves are only meaningful within one frame —
   `world.useFrame` drops the memory when that changes, and is called at
   the same boundaries as the other invalidations.
+- **CC:Tweaked is open source, so read it instead of guessing.** Two
+  failures in a row came from plausible reasoning about behaviour that is
+  written down: long generations died because `http.request` takes a
+  `timeout` field that is a *read* timeout (30s default, 60s max) and we
+  never passed it, and tilling did nothing because `TurtleTool.dig` offers
+  the block to the tool before breaking it — with a comment saying you
+  cannot till with a block above. Both were settled in one fetch of
+  `cc-tweaked/CC-Tweaked` on GitHub. A guess about the game costs an
+  in-game round trip to disprove; reading the source costs a minute.
+- **Files kept across updates go stale silently.** `/ccagent/config.lua` is
+  written once and preserved by `boot` (that is deliberate — it holds the
+  operator's choices), and saved programs under `jobs/` are snapshots of
+  the API as it was the day they were written. Changing a default or adding
+  a capability therefore reaches nobody who already has it installed. When
+  you change either, say so in `CHANGELOG.md`: `boot` reports a shipped
+  config that differs from the kept one, `config.warnings` flags settings
+  that will bite, and `/revise` rewrites a saved program against the
+  current API. None of it fires on its own.
 - Where the game can be asked, ask it. A hardcoded list of what counts as
   fuel, what a recipe looks like, or which upgrades exist is a list that is
   wrong on somebody's modpack — and wrong silently, as "this turtle has no

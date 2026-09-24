@@ -6,6 +6,43 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Documentation**
+
+- `README.md` now says what this is an experiment in: whether enough
+  prebuilt infrastructure makes a turtle usable mid-session on a
+  multiplayer server, rather than something you stop and open an editor
+  for — and whether that lets someone who does not write Lua contribute a
+  routine anyway. It points at the unverified premises rather than
+  implying the question is settled.
+
+- `CLAUDE.md` claimed "every bug this project has actually shipped was the
+  kind this catches". That was false, and it was pointing future work at
+  the wrong kind of confidence. The suite is good at regressions in things
+  already understood and worthless against a wrong belief about the game,
+  because `test/mock.lua` holds the same belief — `block.fill`'s
+  zero-is-truthy report, `block.till`'s impossible geometry, and the 1.1.0
+  `frame` lint all shipped with passing tests that agreed with them. The
+  section now says that, and says what to do instead: fix the mock first
+  and watch the existing tests fail.
+
+- Corrected in passing, all of which had been true once: `thinking` is not
+  off by default (it is on, and is spent out of `maxTokens`); the system
+  prompt is ~4,400 tokens, not ~2,700 in one place and ~3,500 in another;
+  the suite has 515 assertions, not 433. `/doctor`, `/revise`, `/jobs`,
+  `/del`, `/forget` and `/model` existed but were undocumented.
+
+- Two habits added to `CLAUDE.md`: CC:Tweaked is open source and settles
+  questions about its behaviour in one fetch, which would have saved two
+  in-game round trips; and files kept across updates (`config.lua`, saved
+  jobs) go stale silently, so changing a default or adding a capability
+  reaches nobody who already installed it.
+
+- `test/all.lua` now fails when `CLAUDE.md` or `README.md` quotes an
+  assertion count that is no longer true. A number cited as evidence and
+  left to rot makes the claims around it look equally unmaintained, which
+  is how this pass started.
+
+
 **Fixed**
 
 - Raising the default `maxTokens` to 32000 did nothing for anyone who
