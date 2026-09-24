@@ -81,6 +81,7 @@ local HELP = {
   "/expose <n> on|off   show or hide it in the prompt",
   "/unregister <n> revoke it",
   "/check <name>   lint a saved program without registering",
+  "/revise <name>  update a saved program to the current API",
   "/jobs [name]    list saved programs, or describe one",
   "/del <name>     delete a saved program",
   "/calibrate      re-fix position and heading from GPS",
@@ -207,6 +208,47 @@ local function command(input, ctx)
         end
       elseif res.ok then
         sess:buildSystem()
+      end
+    end
+
+  elseif cmd == "revise" then
+    -- A saved program is a snapshot of an API that has since moved. There
+    -- is no lint for "this calls turtle.placeDown where block.till now
+    -- exists" -- the raw call is still legal, it just silently does
+    -- nothing. So hand it back and ask.
+    local name, note = rest:match("^(%S+)%s*(.*)$")
+    if not name or name == "" then
+      console.warn("usage: /revise <name> [what to fix]")
+    else
+      local src, err = jobs.load(name)
+      if not src then console.err(tostring(err))
+      else
+        local chk = jobs.check(name)
+        console.status("asking Claude to update " .. name .. "...")
+        local newSrc, rerr = sess:revise(name, src, note,
+          chk and agent.lint.report(chk.findings or {}) or nil)
+        if not newSrc then console.err(tostring(rerr))
+        elseif newSrc == src then console.head(name .. " is already current")
+        else
+          console.code(newSrc)
+          -- Overwriting the only copy of something that works is worse
+          -- than spending another request, so ask first.
+          local yn = console.ask("replace " .. name .. "? [y/N] ")
+          if yn and yn:lower():sub(1, 1) == "y" then
+            jobs.save(name, newSrc, ctx.lastRequest)
+            agent.lib.invalidate()
+            console.head("updated " .. name)
+            local st = agent.lib.state(name)
+            if st and st.registered then
+              local res = jobs.register(name)
+              jobs.report(name, res, { head = console.head, warn = console.warn,
+                                       err = console.err, dim = console.dim })
+              if res.ok then sess:buildSystem() end
+            end
+          else
+            console.dim("kept the old one")
+          end
+        end
       end
     end
 

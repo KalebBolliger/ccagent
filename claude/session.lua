@@ -205,6 +205,17 @@ function session:retrofit(name, source, findingsText, why)
   return code, meta
 end
 
+--- Rewrite a saved program against the library as it stands now. One
+--- request, and the system prompt it rides on already carries the current
+--- API listing, so this is cheap.
+--- Returns newSource or nil, err.
+function session:revise(name, source, note, findingsText)
+  local text = prompt.revise(name, source, note, findingsText)
+  local code, meta = self:ask(text, { withState = false })
+  if not code then return nil, meta end
+  return code, meta
+end
+
 --- Re-run the last program without spending a request.
 function session:rerun(opts)
   opts = opts or {}

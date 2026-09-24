@@ -25,6 +25,19 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- `/revise <name> [note]` — rewrite a saved program against the library as
+  it stands now. Saved programs rot: this one was written before
+  `block.till` existed, so it tills with `turtle.placeDown()` and will go
+  on silently doing nothing no matter how many times it is re-run. Static
+  analysis cannot catch it, because the raw call is still perfectly legal;
+  it is only wrong relative to a capability that did not exist when the
+  program was written. So the source goes back with the current API
+  listing — already in the cached system prompt, so this costs one cheap
+  request — and the result is shown before it replaces anything. A
+  registered routine is re-registered afterwards so its contract is
+  re-checked.
+
+
 - `block.till(dir, opts)`. A wheat farm reported "Tilled 0" after
   equipping a hoe and walking the whole grid, because the generated
   program used `turtle.placeDown()` to till. Nothing could have made that

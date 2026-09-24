@@ -706,5 +706,46 @@ do
 end
 
 --------------------------------------------------------------------------
+group("revise: a saved program against an API that moved")
+do
+  local client  = require("claude.client")
+  local session = require("claude.session")
+  local prompt  = require("claude.prompt")
+
+  local old = "-- v1\nturtle.placeDown()\n"
+  local sent
+  local real = client.message
+  client.message = function(cfg, body)
+    sent = body.messages[#body.messages].content
+    return { text = "```lua\nblock.till('down')\n```",
+             usage = {}, stop = "end_turn", blocks = {} }
+  end
+
+  local sess = session.new({ apiKey = "t", model = "stub" }, nil)
+  local newSrc, err = sess:revise("setWheatFarm", old, "tilling does nothing")
+  ok(newSrc and newSrc:find("block.till", 1, true) ~= nil,
+     "a revision comes back as code", err)
+
+  -- The request has to carry the source, or the model is guessing.
+  ok(sent:find("turtle.placeDown", 1, true) ~= nil,
+     "the old source is sent for revision")
+  ok(sent:find("tilling does nothing", 1, true) ~= nil,
+     "along with what the operator said is wrong")
+  ok(sent:find("setWheatFarm", 1, true) ~= nil, "and which job it is")
+
+  -- The API listing is what makes this work, and it lives in the cached
+  -- system prompt rather than being re-sent per revision.
+  ok(sent:find("CURRENT STATE", 1, true) == nil,
+     "live turtle state is not sent -- a revision is about source, not pose")
+
+  local bare = prompt.revise("j", "x = 1", nil, nil)
+  ok(bare:find("x = 1", 1, true) ~= nil, "a revision with no note still works")
+  ok(bare:find("unchanged", 1, true) ~= nil,
+     "and tells the model it may decline to change anything")
+
+  client.message = real
+end
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

@@ -175,6 +175,28 @@ the wire, which surfaces in-game as a `require` failure a long way from the
 cause. `test/run_boot.lua` fails if the manifest and the repo disagree, so
 running the suite is enough to catch the omission.
 
+## Adding a capability invalidates saved programs
+
+Not mechanically — they keep running. That is the problem. A program saved
+before `block.till` existed tills with `turtle.placeDown()`, which is still
+legal Lua against a still-present API, and still does nothing. No lint can
+see it: the raw call is only wrong *relative to a capability that did not
+exist when the program was written*.
+
+So when you add a capability that supersedes a raw `turtle.*` call people
+would otherwise reach for, two things are part of the change, not
+follow-ups:
+
+1. Say so in `claude/prompt.lua`, naming the raw call and what it does
+   instead. "Use `block.till`" is advice; "`turtle.place` puts down an
+   inventory item and never uses the equipped tool, so it cannot till" is
+   the thing that stops it being rediscovered the hard way.
+2. Mention in `CHANGELOG.md` that existing saved programs want `/revise`.
+
+`/revise <name> [note]` sends a saved program back with the current API
+listing and replaces it with what comes back, after showing it. It is the
+only repair path for this class of rot, because there is nothing to detect.
+
 ## Testing
 
 `test/mock.lua` is a small voxel world with a turtle in it, plus enough of

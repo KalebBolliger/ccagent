@@ -308,6 +308,42 @@ function prompt.retrofit(name, source, findings, why)
   return s
 end
 
+--- Bring a saved program up to date with the library as it is now.
+---
+--- Saved programs rot: the library gains a capability, or a contract
+--- changes, and a program written months ago keeps running while quietly
+--- doing the wrong thing. There is no static check for "this calls a raw
+--- turtle function where a capability now exists", because the raw call
+--- is still legal -- so the fix is to hand the source back with the
+--- current API listing (already in the cached system prompt) and ask.
+function prompt.revise(name, source, note, findings)
+  local s = ("Update this saved program, '%s', to match the capability "
+          .. "library as listed above.\n"):format(name)
+  if note and note ~= "" then
+    s = s .. "\nThe operator says: " .. note .. "\n"
+  end
+  if findings and findings ~= "" then
+    s = s .. "\nStatic analysis of the source found:\n" .. findings .. "\n"
+  end
+  s = s .. [[
+
+Keep what it does the same. Change only what the library now does
+differently or better:
+  * a raw turtle.* call where a capability now exists -- prefer the
+    capability, which checks and reports what the raw call does silently;
+  * a result contract that has changed;
+  * anything the listing above shows is no longer the right way.
+
+If it already matches the current API, say so in one line and return the
+source unchanged. Preserve any @ccagent contract header; if the code
+changes what the header claims, update the header to match.
+
+Source:
+```lua
+]] .. source .. "\n```"
+  return s
+end
+
 --- What we send back after a run fails, so the next attempt is a repair
 --- rather than a fresh guess.
 function prompt.failure(err, output)
