@@ -92,6 +92,7 @@ local HELP = {
   "/reset          forget the conversation (keeps world memory)",
   "/forget         wipe world memory and pose",
   "/stats          token usage this session",
+  "/doctor         version, transport, one test call",
   "/exit",
 }
 
@@ -283,6 +284,30 @@ local function command(input, ctx)
 
   elseif cmd == "stats" then
     console.info(sess:statsLine())
+
+  elseif cmd == "doctor" then
+    -- Answers one question: is this turtle running the code you think it
+    -- is, and does a request actually complete? Both halves matter --
+    -- a stale install and a broken transport look identical from the
+    -- outside, and "Timed out" is printed by CC, not by us.
+    local client = require("claude.client")
+    local s = client.settings(cfg)
+    console.head("ccagent " .. agent.VERSION)
+    console.info(("stream %s  read %ds  wait %ds"):format(
+      s.stream and "on" or "OFF", s.readTimeout, s.timeout))
+    if not s.stream then
+      console.warn("streaming off: long jobs will fail")
+    end
+    console.info(("http %s   key %s"):format(
+      _G.http and "ok" or "OFF",
+      config.hasKey(cfg) and "ok" or "missing"))
+    console.status("one test request...")
+    local took, err = client.ping(cfg)
+    if took then
+      console.say(("ok, %.1fs"):format(took))
+    else
+      console.err(tostring(err))
+    end
 
   elseif cmd == "exit" or cmd == "quit" then
     ctx.running = false

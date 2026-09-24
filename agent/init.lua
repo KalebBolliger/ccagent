@@ -32,7 +32,7 @@ agent.inv,  agent.block, agent.job     = inv, block, job
 agent.registry, agent.lib              = registry, lib
 agent.contract, agent.lint             = contract, lint
 
-agent.VERSION = "1.1.1"
+agent.VERSION = "1.2.0"
 
 --------------------------------------------------------------- helpers ----
 -- Small cross-cutting utilities that do not belong to one module but are

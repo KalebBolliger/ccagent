@@ -343,6 +343,33 @@ function client.parse(data)
   return out
 end
 
+--- What this build will actually do on the wire, for `/doctor`. Exists
+--- because the failure mode it diagnoses is "the turtle is running older
+--- code than you think", and every other symptom of that is ambiguous.
+function client.settings(cfg)
+  cfg = cfg or {}
+  local streaming = (cfg.stream ~= false) and (client.stream ~= false)
+  return {
+    stream      = streaming,
+    timeout     = cfg.timeout or client.timeout,
+    readTimeout = readWindow(cfg.readTimeout or client.readTimeout),
+    retries     = cfg.retries or client.retries,
+  }
+end
+
+--- One cheap round trip, to prove the transport end to end.
+--- Returns seconds, nil on success, or nil, err.
+function client.ping(cfg)
+  local started = os.clock()
+  local resp, err = client.message({
+    apiKey = cfg.apiKey, model = cfg.model, maxTokens = 16,
+    stream = cfg.stream, timeout = cfg.timeout,
+    readTimeout = cfg.readTimeout, retries = 1,
+  }, { messages = { { role = "user", content = "Reply with the word ok." } } })
+  if not resp then return nil, err end
+  return os.clock() - started
+end
+
 --- Cost line for the status bar. Cache reads are the number to watch: if
 --- this stays near zero across turns, the system prompt is not being
 --- cached and every request is paying full price for the manifest.

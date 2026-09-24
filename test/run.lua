@@ -1254,5 +1254,49 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("/doctor: telling a stale install apart from a broken transport")
+mock.reset()
+do
+  local client = require("claude.client")
+
+  local s = client.settings({})
+  ok(s.stream == true, "streaming is on by default")
+  ok(s.readTimeout == 60, "and reports CC's window, not ours", s.readTimeout)
+  ok(s.timeout == 180, "our ceiling is reported separately", s.timeout)
+  ok(client.settings({ stream = false }).stream == false,
+     "a config override is reflected, not the module default")
+  ok(client.settings({ readTimeout = 900 }).readTimeout == 60,
+     "and the reported window is the clamped one -- the number CC will see")
+
+  -- The whole point of /doctor is that it fails loudly rather than
+  -- reporting health it did not check.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = mock.sse({
+    { "message_start", { type = "message_start",
+                         message = { usage = { input_tokens = 4 } } } },
+    { "content_block_start", { type = "content_block_start", index = 0,
+                               content_block = { type = "text", text = "" } } },
+    { "content_block_delta", { type = "content_block_delta", index = 0,
+                               delta = { type = "text_delta", text = "ok" } } },
+    { "message_delta", { type = "message_delta",
+                         delta = { stop_reason = "end_turn" }, usage = {} } },
+    { "message_stop", { type = "message_stop" } },
+  }) })
+  local took, err = client.ping({ apiKey = "t", model = "stub" })
+  ok(took ~= nil, "a working transport reports a time", err)
+
+  mock.resetHttp()
+  mock.http.reply({ failure = "Timed out" })
+  local t2, e2 = client.ping({ apiKey = "t", model = "stub" })
+  ok(t2 == nil and tostring(e2):find("cut off") ~= nil,
+     "a dead transport reports the reason", e2)
+
+  -- One attempt, not three: /doctor is a question, not a retry loop.
+  ok(#mock.http.requests == 1, "the test call does not retry",
+     #mock.http.requests)
+end
+mock.resetHttp()
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)
