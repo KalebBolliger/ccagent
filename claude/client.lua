@@ -6,13 +6,27 @@
   http.request plus the event loop instead, so the controller can draw a
   "thinking..." line and honour a keypress while the request is in flight.
 
-  Handles the three things that actually bite in practice:
+  Streaming is on by default, and not for the usual reason. CC:Tweaked
+  puts a Netty ReadTimeoutHandler on every request: 30s by default, 60s
+  maximum, settable per request as the `timeout` field of the http.request
+  options table. It measures *silence*, not elapsed time. A non-streaming
+  Messages call sends no bytes at all until the whole reply is generated,
+  so any job whose program takes longer than that to write is killed
+  mid-generation and comes back as `http_failure` with CC's own message,
+  "Timed out". Streaming keeps deltas and pings flowing, so the read
+  timeout never fires however long the job takes. CC still buffers the
+  whole body before it hands us a handle, so this costs no latency and
+  gains no progress reporting -- it only stops the connection dying.
+
+  Handles the things that actually bite in practice:
     * error bodies -- CC hands them back as a third return value that is
       easy to drop on the floor, and it is where the real message lives;
     * extended thinking -- responses come back as a content *array* whose
       first blocks may be `thinking`, not `text`;
     * rate limits and overloads -- 429 / 529 / 5xx get retried with backoff
-      and honour Retry-After.
+      and honour Retry-After;
+    * transport failures -- retried with backoff too, rather than three
+      immediate re-sends of the same request.
 --------------------------------------------------------------------------]]
 
 local util = require("agent.util")
@@ -21,8 +35,19 @@ local client = {}
 
 client.endpoint   = "https://api.anthropic.com/v1/messages"
 client.apiVersion = "2023-06-01"
-client.timeout    = 60      -- seconds per attempt
 client.retries    = 3
+client.stream     = true    -- see the note above; turning this off brings
+                            -- the 30s generation ceiling back
+
+-- Our own ceiling on one attempt, enforced with os.startTimer. It exists
+-- so a wedged request cannot hang the turtle forever, not to bound
+-- generation: a guess, generous on purpose.
+client.timeout    = 180
+
+-- What we ask CC to use for *its* read timeout. 60 is its maximum; builds
+-- too old to know the field fall back to 30, which streaming makes
+-- survivable anyway.
+client.readTimeout = 60
 
 local function encode(t)
   local fn = textutils and (textutils.serialiseJSON or textutils.serializeJSON)
@@ -40,13 +65,30 @@ end
 
 --------------------------------------------------------------- transport --
 
+--- Clamp to the range CC:Tweaked will accept for its read timeout. Out of
+--- range is an error from http.request, not a warning, so this is not
+--- cosmetic.
+local function readWindow(n)
+  n = tonumber(n) or client.readTimeout
+  if n < 1 then n = 1 end
+  if n > 60 then n = 60 end
+  return n
+end
+
 --- One HTTP attempt. Returns status, bodyString, headers.
-local function attempt(url, body, headers, timeout)
+---   opts { timeout = our ceiling, readTimeout = CC's silence window }
+local function attempt(url, body, headers, opts)
   if not _G.http then return nil, "the http API is disabled in this world" end
+  opts = opts or {}
+  local timeout = opts.timeout or client.timeout
+  local window  = readWindow(opts.readTimeout)
 
-  http.request({ url = url, body = body, headers = headers, method = "POST" })
+  -- `timeout` here is CC's, in seconds, and it is the one that actually
+  -- kills long generations. Builds that predate the field ignore it.
+  http.request({ url = url, body = body, headers = headers, method = "POST",
+                 timeout = window })
 
-  local timer = os.startTimer(timeout or client.timeout)
+  local timer = os.startTimer(timeout)
   while true do
     local ev, a, b, c = os.pullEvent()
     if ev == "http_success" and a == url then
@@ -70,9 +112,15 @@ local function attempt(url, body, headers, timeout)
         return status, text, hdrs
       end
       os.cancelTimer(timer)
-      return nil, msg or "request failed"
+      msg = msg or "request failed"
+      -- CC's own wording for its read timeout. Say what it means, since
+      -- "Timed out" reads like our timer and sends people to the wrong knob.
+      if tostring(msg):lower():find("timed out") then
+        msg = ("no data for %ds -- the reply was cut off"):format(window)
+      end
+      return nil, msg
     elseif ev == "timer" and a == timer then
-      return nil, ("request timed out after %ds"):format(timeout or client.timeout)
+      return nil, ("gave up waiting after %ds"):format(timeout)
     elseif ev == "ccagent_abort" then
       os.cancelTimer(timer)
       return nil, "cancelled"
@@ -86,6 +134,81 @@ local function retryAfter(headers)
     if tostring(k):lower() == "retry-after" then return tonumber(v) end
   end
   return nil
+end
+
+-------------------------------------------------------------- streaming ---
+
+--- Rebuild a Messages response from a server-sent-events body.
+---
+--- CC buffers the whole body before we ever see it, so this is not
+--- incremental parsing -- it is undoing the streaming encoding to get back
+--- the object the non-streaming endpoint would have returned. The one
+--- extra thing it tells us is `truncated`: a body with no `message_stop`
+--- is a reply that was cut off, which is worth saying out loud rather than
+--- handing a half-written program to the syntax check.
+---
+--- Returns data, err. `data.truncated` is true when the stream did not end.
+function client.unstream(text)
+  local data = { content = {}, usage = {}, truncated = true }
+  local byIndex, order = {}, {}
+
+  for line in tostring(text or ""):gmatch("[^\n]+") do
+    line = line:gsub("\r$", "")
+    local payload = line:match("^data:%s*(.*)$")
+    if payload and payload ~= "" and payload ~= "[DONE]" then
+      local ev = decode(payload)
+      local t = ev and ev.type
+      if t == "error" then
+        local e = ev.error or {}
+        return nil, ("API error: %s"):format(e.message or e.type or "unknown")
+
+      elseif t == "message_start" and ev.message then
+        local m = ev.message
+        data.id, data.model, data.role = m.id, m.model, m.role
+        data.stop_reason = m.stop_reason
+        for k, v in pairs(m.usage or {}) do data.usage[k] = v end
+
+      elseif t == "content_block_start" then
+        local b = {}
+        for k, v in pairs(ev.content_block or {}) do b[k] = v end
+        byIndex[ev.index or 0] = b
+        order[#order + 1] = ev.index or 0
+
+      elseif t == "content_block_delta" then
+        local b = byIndex[ev.index or 0]
+        if not b then
+          b = { type = "text", text = "" }
+          byIndex[ev.index or 0] = b
+          order[#order + 1] = ev.index or 0
+        end
+        local d = ev.delta or {}
+        if d.text then b.text = (b.text or "") .. d.text end
+        if d.thinking then b.thinking = (b.thinking or "") .. d.thinking end
+        if d.partial_json then
+          b.partial_json = (b.partial_json or "") .. d.partial_json
+        end
+        if d.signature then b.signature = (b.signature or "") .. d.signature end
+
+      elseif t == "message_delta" then
+        if ev.delta and ev.delta.stop_reason then
+          data.stop_reason = ev.delta.stop_reason
+        end
+        -- Output tokens only arrive here; input tokens only in message_start.
+        for k, v in pairs(ev.usage or {}) do data.usage[k] = v end
+
+      elseif t == "message_stop" then
+        data.truncated = false
+      end
+    end
+  end
+
+  for _, idx in ipairs(order) do
+    data.content[#data.content + 1] = byIndex[idx]
+  end
+  if #data.content == 0 and data.truncated then
+    return nil, "the reply was cut off before any content arrived"
+  end
+  return data
 end
 
 --------------------------------------------------------------- requests ---
@@ -119,28 +242,53 @@ function client.message(cfg, body)
     payload.thinking = { type = "enabled", budget_tokens = budget }
   end
 
+  local streaming = (cfg.stream ~= false) and (client.stream ~= false)
+  if streaming then payload.stream = true end
+
   local headers = {
     ["x-api-key"]         = cfg.apiKey,
     ["anthropic-version"] = client.apiVersion,
     ["content-type"]      = "application/json",
-    ["accept"]            = "application/json",
+    ["accept"]            = streaming and "text/event-stream" or "application/json",
   }
   if cfg.beta then headers["anthropic-beta"] = cfg.beta end
 
   local json = encode(payload)
   local lastErr
 
-  for tryN = 1, (cfg.retries or client.retries) do
-    local status, text, hdrs = attempt(client.endpoint, json, headers,
-                                       cfg.timeout or client.timeout)
+  local tries = cfg.retries or client.retries
+  for tryN = 1, tries do
+    local status, text, hdrs = attempt(client.endpoint, json, headers, {
+      timeout     = cfg.timeout or client.timeout,
+      readTimeout = cfg.readTimeout or client.readTimeout,
+    })
 
     if status == nil then
       lastErr = text
       if lastErr == "cancelled" then return nil, lastErr end
+      -- A transport failure used to re-send immediately, three times, which
+      -- turns one bad minute into three and helps nothing.
+      if tryN < tries then
+        local wait = math.min(2 ^ tryN, 30)
+        util.log.warn("request failed (%s); retrying in %ss",
+                      tostring(lastErr), tostring(wait))
+        util.sleep(wait)
+      end
     elseif status >= 200 and status < 300 then
-      local data = decode(text)
+      local data, derr
+      if streaming then
+        data, derr = client.unstream(text)
+        if not data then return nil, derr end
+      else
+        data = decode(text)
+      end
       if not data then return nil, "could not parse API response" end
-      return client.parse(data)
+      local out, perr = client.parse(data)
+      if not out and data.truncated then
+        return nil, "the reply was cut off mid-program -- try a smaller job"
+      end
+      if out and data.truncated then out.truncated = true end
+      return out, perr
     else
       local data = decode(text or "")
       local msg = data and data.error and data.error.message

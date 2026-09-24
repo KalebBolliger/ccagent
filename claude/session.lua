@@ -115,6 +115,9 @@ function session:ask(text, opts)
 
   local code, note = extract.code(resp.text)
   if not code then
+    if resp.truncated then
+      return nil, "the reply was cut off mid-program -- try a smaller job"
+    end
     return nil, "could not read a program from the reply: " .. tostring(note)
   end
   local okSyntax, syntaxErr = extract.check(code)

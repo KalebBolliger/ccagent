@@ -6,6 +6,43 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Fixed**
+
+- A big job ("dig out an 11x11x2 space...") failed generation with
+  `Timed out`, twice, having taken no action. The cause was not our
+  timeout. CC:Tweaked puts a Netty read timeout on every `http.request` —
+  30s by default, 60s maximum, settable only as the `timeout` field of the
+  options table, which we were not passing. It measures *silence on the
+  socket*, and a non-streaming Messages call is silent for the entire
+  generation. So the real limit on a job was never "how long will the
+  operator wait" but "can the whole program be written in under 30s," and
+  exceeding it killed the request mid-generation. Our own 60s
+  `os.startTimer` never got the chance to fire; raising it would have
+  changed nothing, which is worth saying because that is the setting the
+  message points at.
+
+  Responses are now streamed, which is the only fix that works: deltas and
+  pings keep bytes arriving, so the read timeout cannot fire however long
+  the job takes. CC's `timeout` is also passed explicitly and clamped to
+  its maximum, so an old build that ignores the field still degrades to
+  30s rather than erroring. `stream = false` is still available and still
+  carries the old ceiling.
+
+- Streaming does *not* buy progress reporting or partial recovery, and the
+  code no longer implies it might. CC accumulates the whole body before
+  Lua sees a handle, so a timed-out request is discarded entirely — there
+  is nothing to resume. The one partial case that *is* observable is an
+  SSE body with no `message_stop`, which is now flagged as `truncated` and
+  reported as "the reply was cut off mid-program" instead of surfacing as
+  a baffling syntax error in code nobody wrote.
+
+- A transport failure used to be retried three times with no delay,
+  turning one bad minute into three. It now backs off like a 429 does.
+
+- CC's `"Timed out"` is translated on the way out. The bare string reads
+  like our timer and sent the diagnosis to the wrong knob; the message now
+  names the silence window that actually elapsed.
+
 **Added**
 
 - `boot.lua`: a one-command bootstrapper, so getting this onto a turtle is

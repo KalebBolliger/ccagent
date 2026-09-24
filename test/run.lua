@@ -1136,5 +1136,123 @@ ok(not inv.craft({ { WHEAT, WHEAT, WHEAT, WHEAT } }),
    "a four-cell row is refused")
 
 --------------------------------------------------------------------------
+group("transport: the timeout that actually kills long generations")
+mock.reset()
+do
+  local client = require("claude.client")
+  local cfg = { apiKey = "test", model = "stub", maxTokens = 64, retries = 1 }
+
+  -- A turtle-sized reply, streamed the way the API sends it.
+  local function streamed(text, opts)
+    opts = opts or {}
+    local parts = {
+      { "message_start", { type = "message_start", message = {
+          id = "msg_1", model = "stub", role = "assistant",
+          usage = { input_tokens = 12, cache_read_input_tokens = 1700 } } } },
+      { "content_block_start", { type = "content_block_start", index = 0,
+          content_block = { type = "text", text = "" } } },
+    }
+    -- Split across deltas: the point of the format is that no single event
+    -- carries the whole program.
+    for i = 1, #text, 7 do
+      parts[#parts + 1] = { "content_block_delta", {
+        type = "content_block_delta", index = 0,
+        delta = { type = "text_delta", text = text:sub(i, i + 6) } } }
+    end
+    parts[#parts + 1] = { "content_block_stop",
+      { type = "content_block_stop", index = 0 } }
+    parts[#parts + 1] = { "message_delta", { type = "message_delta",
+      delta = { stop_reason = opts.stop or "end_turn" },
+      usage = { output_tokens = 40 } } }
+    if not opts.truncate then
+      parts[#parts + 1] = { "message_stop", { type = "message_stop" } }
+    end
+    return mock.sse(parts)
+  end
+
+  local body = "Here.\n```lua\njob.report(1)\n```"
+  mock.http.reply({ status = 200, body = streamed(body) })
+  local resp, err = client.message(cfg, { messages = { { role = "user", content = "hi" } } })
+  ok(resp ~= nil, "a streamed reply is reassembled", err)
+  ok(resp and resp.text == body, "deltas are concatenated in order",
+     resp and resp.text)
+  ok(resp and resp.stop == "end_turn", "stop_reason survives the stream")
+
+  -- Usage arrives in two different events and both halves matter: input
+  -- only in message_start, output only in message_delta.
+  ok(resp and resp.usage.input_tokens == 12, "input tokens from message_start")
+  ok(resp and resp.usage.output_tokens == 40, "output tokens from message_delta")
+  ok(resp and resp.usage.cache_read_input_tokens == 1700,
+     "cache reads still accounted for -- the cost line depends on it")
+
+  -- The request itself. Both of these are the bug: CC's read timeout is
+  -- what fired in-game, and without `stream` there is nothing to keep the
+  -- connection alive while a big program is written.
+  local req = mock.http.requests[#mock.http.requests]
+  ok(req.timeout == 60, "http.request carries CC's read timeout", req.timeout)
+  ok(req.body:find('"stream":true', 1, true) ~= nil
+     or req.body:find('"stream": true', 1, true) ~= nil,
+     "the request asks for a stream")
+  ok(tostring(req.headers["accept"]):find("event%-stream") ~= nil,
+     "accept header matches", req.headers["accept"])
+
+  -- Out-of-range is an error from http.request, not a warning.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = streamed(body) })
+  client.message({ apiKey = "t", retries = 1, readTimeout = 999 },
+                 { messages = { { role = "user", content = "hi" } } })
+  ok(mock.http.requests[1].timeout == 60, "read timeout is clamped to CC's max",
+     mock.http.requests[1].timeout)
+
+  -- A cut-off stream is reported as cut off, not as a mystery.
+  mock.resetHttp()
+  mock.http.reply({ status = 200,
+                    body = streamed("Here.\n```lua\njob.repo", { truncate = true }) })
+  local r2, e2 = client.message(cfg, { messages = { { role = "user", content = "hi" } } })
+  ok(r2 and r2.truncated == true, "a stream with no message_stop is flagged", e2)
+
+  -- CC's own wording gets translated. "Timed out" alone sends people to
+  -- our timeout setting, which is not the one that fired.
+  mock.resetHttp()
+  mock.http.reply({ failure = "Timed out" })
+  local r3, e3 = client.message({ apiKey = "t", retries = 1 },
+                                { messages = { { role = "user", content = "hi" } } })
+  ok(r3 == nil, "a transport failure fails the request")
+  ok(tostring(e3):find("cut off") ~= nil and tostring(e3):find("60") ~= nil,
+     "CC's timeout is explained in terms of the silence window", e3)
+
+  -- An API error delivered inside the stream is an error, not empty text.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = mock.sse({
+    { "message_start", { type = "message_start", message = { usage = {} } } },
+    { "error", { type = "error",
+                 error = { type = "overloaded_error", message = "Overloaded" } } },
+  }) })
+  local r4, e4 = client.message(cfg, { messages = { { role = "user", content = "hi" } } })
+  ok(r4 == nil and tostring(e4):find("Overloaded") ~= nil,
+     "an in-stream error is surfaced", e4)
+
+  -- Our own timer is the backstop, and it is no longer the 60s one.
+  mock.resetHttp()
+  local r5, e5 = client.message({ apiKey = "t", retries = 1, timeout = 180 },
+                                { messages = { { role = "user", content = "hi" } } })
+  ok(r5 == nil and tostring(e5):find("180") ~= nil,
+     "an unanswered request hits our ceiling", e5)
+
+  -- Non-streaming still works, for a build where SSE misbehaves.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = (textutils.serialiseJSON({
+    content = { { type = "text", text = "```lua\njob.report(2)\n```" } },
+    stop_reason = "end_turn", usage = { input_tokens = 1, output_tokens = 2 },
+  })) })
+  local r6, e6 = client.message({ apiKey = "t", retries = 1, stream = false },
+                                { messages = { { role = "user", content = "hi" } } })
+  ok(r6 ~= nil and r6.text:find("job.report") ~= nil, "stream = false still works", e6)
+  ok(mock.http.requests[1].body:find("stream", 1, true) == nil,
+     "and does not ask for a stream")
+end
+mock.resetHttp()
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

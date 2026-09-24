@@ -427,6 +427,99 @@ do
   decodeJSON = function(s) src, pos = s, 1; return value() end
 end
 
+----------------------------------------------------------------- http ----
+-- Enough of the CC event loop and http API to drive claude/client.lua.
+-- The queue is deterministic: os.pullEvent drains queued events first and
+-- only then fires the earliest outstanding timer, so a scripted reply
+-- always wins the race and an unscripted one always times out.
+
+local unpack = table.unpack or unpack
+local events, timers, nextTimer = {}, {}, 0
+
+mock.http = { requests = {}, replies = {} }
+
+--- Script the next reply.
+---   mock.http.reply({ status = 200, body = "..." })       -> http_success
+---   mock.http.reply({ failure = "Timed out" })            -> http_failure
+---   mock.http.reply({ failure = "...", status = 429, body = "..." })
+---   (script nothing at all to exercise our own timer)
+function mock.http.reply(r)
+  mock.http.replies[#mock.http.replies + 1] = r
+end
+
+local function handleFor(r)
+  local closed = false
+  return {
+    getResponseCode    = function() return r.status or 200 end,
+    getResponseHeaders = function() return r.headers or {} end,
+    readAll            = function() return r.body or "" end,
+    close              = function() closed = true end,
+    isClosed           = function() return closed end,
+  }
+end
+
+local http = {}
+
+function http.request(opts)
+  mock.http.requests[#mock.http.requests + 1] = opts
+  local r = table.remove(mock.http.replies, 1)
+  if not r then return true end          -- nothing queued: let it time out
+  if r.failure then
+    events[#events + 1] = { "http_failure", opts.url, r.failure,
+                            r.status and handleFor(r) or nil }
+  else
+    events[#events + 1] = { "http_success", opts.url, handleFor(r) }
+  end
+  return true
+end
+
+local function startTimer(t)
+  nextTimer = nextTimer + 1
+  timers[#timers + 1] = { id = nextTimer, at = t or 0 }
+  return nextTimer
+end
+
+local function cancelTimer(id)
+  for i = #timers, 1, -1 do
+    if timers[i].id == id then table.remove(timers, i) end
+  end
+end
+
+local function queueEvent(...)
+  events[#events + 1] = { ... }
+end
+
+local function pullEvent()
+  local e = table.remove(events, 1)
+  if e then return unpack(e) end
+  -- No events left: the soonest timer is what happens next.
+  local soonest
+  for _, t in ipairs(timers) do
+    if not soonest or t.at < soonest.at then soonest = t end
+  end
+  if soonest then
+    cancelTimer(soonest.id)
+    return "timer", soonest.id
+  end
+  error("mock: pullEvent with nothing queued and no timer pending", 0)
+end
+
+function mock.resetHttp()
+  for i = #events, 1, -1 do events[i] = nil end
+  for i = #timers, 1, -1 do timers[i] = nil end
+  for i = #mock.http.requests, 1, -1 do mock.http.requests[i] = nil end
+  for i = #mock.http.replies, 1, -1 do mock.http.replies[i] = nil end
+end
+
+--- Build an SSE body from a list of {event, dataTable} pairs.
+function mock.sse(parts)
+  local out = {}
+  for _, p in ipairs(parts) do
+    out[#out + 1] = ("event: %s\ndata: %s\n"):format(p[1], encodeJSON(p[2]))
+  end
+  return table.concat(out, "\n")
+end
+
 function mock.install()
   _G.turtle = turtle
   _G.fs = fs
@@ -440,7 +533,12 @@ function mock.install()
   _G.peripheral = { getNames = function() return {} end,
                     getType = function() return nil end,
                     find = function() return nil end }
-  _G.os.epoch = function() return math.floor(os.clock() * 1000) end
+  _G.http = http
+  _G.os.epoch        = function() return math.floor(os.clock() * 1000) end
+  _G.os.startTimer   = startTimer
+  _G.os.cancelTimer  = cancelTimer
+  _G.os.queueEvent   = queueEvent
+  _G.os.pullEvent    = pullEvent
   _G.parallel = nil
   return mock
 end
@@ -458,6 +556,7 @@ function mock.reset()
       mock.equippedLeft, mock.equippedRight
   mock.dropped = 0
   mock.crafted = 0
+  mock.resetHttp()
 end
 
 return mock

@@ -169,6 +169,52 @@ success-shaped output. That second failure mode is real and is not
 mitigated by anything in this codebase except the operator writing
 `needs:` honestly — there's no way to derive it from source.
 
+## The HTTP timeout is CC's, not ours (`claude/client.lua`)
+
+Worth knowing before touching the client, because the obvious reading of a
+"Timed out" failure sends you to the wrong setting.
+
+CC:Tweaked puts a Netty `ReadTimeoutHandler` on every `http.request`. It
+measures **silence on the socket**, not elapsed time, and it is the thing
+that kills long generations:
+
+- default **30s**, maximum **60s**, passed as the `timeout` field of the
+  `http.request` options table (seconds). Out of range is an error from
+  `http.request`, not a warning.
+- there is no server-side config for it — it is per request or nothing.
+- when it fires you get `http_failure` with CC's own message, the literal
+  string `"Timed out"`, and **no response handle**.
+
+A non-streaming Messages call sends zero bytes until the entire reply has
+been generated. So the ceiling on a job is not "how long will the operator
+wait" — it is "can Claude write this whole program in under 30 seconds of
+wall clock." An 11×11×2 excavation asked for at 4096 `max_tokens` is
+comfortably over it, and fails *mid-generation* having spent the output
+tokens.
+
+Streaming (`stream: true`, on by default) fixes this and is the only thing
+that does: deltas and `ping` events keep bytes arriving, so the read
+timeout never fires however long the job takes. Note what it does *not*
+buy, because it is tempting to assume otherwise — CC's
+`HttpRequestHandler` accumulates the whole body into a composite buffer
+and only fires `http_success` at `LastHttpContent`. Lua never sees a
+partial response. So:
+
+- there is no progress reporting to be had from streaming here, and no
+  spinner that reflects real progress;
+- **a timed-out request cannot be recovered from.** The buffer is
+  discarded and no handle reaches us. The only partial case we can
+  observe is a body that arrived complete but whose SSE stream has no
+  `message_stop` — `client.unstream` flags that as `truncated` so a
+  half-written program is reported as cut off rather than handed to the
+  syntax check.
+
+Two timeouts therefore exist and they are not interchangeable:
+`readTimeout` (CC's, ≤60, the silence window) and `timeout` (ours, an
+`os.startTimer` backstop so a wedged request can't hang the turtle
+forever). Raising ours does nothing about the failure this section
+describes.
+
 ## Unverified premises
 
 Things the design assumes but that have not been measured against a real
@@ -193,6 +239,10 @@ confirmed this":
   (fuel checks, protected-block refusal, obstacle memory) are bypassed
   without anything failing. Worth spot-checking `/code` output
   periodically, not just trusting the prompt's instructions to work.
+- **`client.timeout = 180`** is a guess: a backstop generous enough not to
+  interrupt a legitimately long generation, short enough that a wedged
+  request does not strand the turtle. Nothing measured it. `readTimeout`
+  is not a guess — 60 is CC's documented maximum.
 - **`world.staleAfter = 600000` (10 min) and the A* `enterCost` of `4` for
   a known-diggable block** are both invented numbers, not derived from
   anything. They control "how long do I trust what I saw" and "how much do
