@@ -8,6 +8,37 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- `block.till` could not till anything, and blamed the wrong thing for it.
+  A turtle standing on the ground can never till that ground: vanilla
+  refuses to till a block with anything above it, and the turtle is a
+  block. CC:Tweaked works around this only in the one case where it can --
+  `TurtleTool.useTool` reaches one block further down when the space
+  directly below is air, with the comment "you can't till dirt/flatten
+  grass if there's a block above". So tilling down requires hovering over
+  a gap: floor + 2, never floor + 1.
+
+  Standing on it produces no visible effect at all, which is what made it
+  hard to read. The hoe declines to till, and the break `dig` falls
+  through to is refused as INEFFECTIVE because dirt is not in the hoe's
+  breakable tag. Nothing happens, nothing is destroyed, and the old
+  message guessed "is a hoe equipped?" -- which was wrong, and sent the
+  diagnosis somewhere useless. It now refuses before spending the dig and
+  says to move up one, and every failure path names what is actually
+  equipped instead of speculating.
+
+  The same position works for planting: from floor + 2,
+  `block.place("down", seeds)` drops the seed into the gap onto the
+  farmland, so a farm is one pass rather than two at different heights.
+
+  The tests for this were written with the turtle standing on the dirt --
+  the geometry that cannot work -- so they had agreed with the bug. That
+  is the third time a test has encoded the same assumption as the code it
+  covers (see the `frame` lint, and the zero-is-truthy `info` contract).
+  `test/mock.lua` now models both rules, including that tool use is
+  attempted *before* the "is there a block here" check, which is what
+  makes the reach-one-further case work at all.
+
+
 - A 9x9 floor that placed all 81 blocks reported `fill incomplete:
   unknown reason`. `block.fill` initialised `info.unreachable` and
   `info.unplaceable` to 0 and `claude/prompt.lua` instructed the model to

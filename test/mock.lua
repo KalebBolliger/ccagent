@@ -100,19 +100,42 @@ mock.toolUse = {
 local function dig(dir)
   if not T.hasTool then return false, "No tool to dig with" end
   local x, y, z = posFor(dir)
+
+  -- Tool use comes first, and consumes the dig without dropping loot.
+  -- Two rules, both from CC:Tweaked's TurtleTool:
+  --   * vanilla will not till a block that has anything above it, and the
+  --     turtle itself is a block, so it can never till what it stands on;
+  --   * digging DOWN reaches one block further when the one directly
+  --     below is air, which is the only geometry that ever works.
+  -- This runs BEFORE the "is there a block here" check, exactly as
+  -- TurtleTool.dig does -- its own comment says the reach matters.
+  local eq = T.equipped or {}
+  local ux, uy, uz = x, y, z
+  if dir == "down" and not W[key(x, y, z)] then uy = y - 1 end
+
+  local target = W[key(ux, uy, uz)]
+  local aboveIsTurtle = (ux == T.x and uy + 1 == T.y and uz == T.z)
+  if target and not W[key(ux, uy + 1, uz)] and not aboveIsTurtle then
+    for _, side in ipairs({ "left", "right" }) do
+      local uses = eq[side] and mock.toolUse[eq[side]]
+      if uses and uses[target] then
+        W[key(ux, uy, uz)] = uses[target]
+        return true
+      end
+    end
+  end
+
+  -- A tool that has a use for blocks but could not apply it here is also
+  -- refused the fall-through break: dirt is not in a hoe's breakable tag.
+  for _, side in ipairs({ "left", "right" }) do
+    if eq[side] and mock.toolUse[eq[side]] then
+      return false, "Cannot break block with this tool"
+    end
+  end
+
   local n = W[key(x, y, z)]
   if not n then return false, "Nothing to dig here" end
   if n == "minecraft:bedrock" then return false, "Unbreakable block detected" end
-
-  -- Tool use comes first, and consumes the dig without dropping loot.
-  local eq = T.equipped or {}
-  for _, side in ipairs({ "left", "right" }) do
-    local uses = eq[side] and mock.toolUse[eq[side]]
-    if uses and uses[n] then
-      W[key(x, y, z)] = uses[n]
-      return true
-    end
-  end
 
   W[key(x, y, z)] = nil
   -- loot goes to the first slot that fits

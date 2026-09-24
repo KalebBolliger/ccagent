@@ -93,10 +93,14 @@ HOW TO WRITE GOOD TURTLE CODE
   report of "placed 0" with no explanation is the least useful thing a
   program can produce.
 - To turn ground into farmland, use block.till("down") with a hoe
-  equipped. turtle.place/placeDown puts down an item from the selected
-  inventory slot and never uses the equipped tool, so it cannot till --
-  it just silently does nothing. Seeds only plant on farmland, so till
-  first, then block.place("down", "wheat_seeds").
+  equipped, and stand TWO blocks above the ground, not one. A block with
+  anything above it cannot be tilled, and standing on it makes the turtle
+  that anything -- so tilling down only works across a gap of air.
+  turtle.place/placeDown cannot till at all: it puts down an item from the
+  selected inventory slot and never uses the equipped tool.
+  From that same hovering position, block.place("down", "wheat_seeds")
+  drops the seed into the gap, onto the farmland -- so a farm is one pass
+  at floor + 2, tilling and planting at each cell.
 - Finish with job.report(...) carrying the result: a count, a list of
   positions, a summary table. The operator sees it and it becomes context
   for their follow-up request.

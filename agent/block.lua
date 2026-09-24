@@ -313,57 +313,80 @@ end
 --- leaving it to be inferred from a number's truthiness.
 --- Till the ground with an equipped hoe (or flatten it with a shovel).
 ---
---- Non-obvious enough to be worth a capability rather than leaving every
---- generated program to guess: in CC:Tweaked a hoe does NOT till through
---- turtle.place*. `place` puts down the item in the selected inventory
---- slot; the equipped tool is not involved. Tilling happens through
---- `turtle.dig*`, because TurtleTool.dig checks the tool for a
---- use-on-block action and performs that instead of breaking. A program
---- reaching for placeDown() to till -- the obvious guess -- silently
---- does nothing, which is exactly what happened to a 9x9 wheat farm that
---- reported "Tilled 0".
+--- Two things about this are not guessable from the API surface, and both
+--- have already cost a wheat farm:
 ---
---- The same call breaks the block when the tool has no use for it, so
---- this looks before and after and says which happened rather than
---- reporting a hole in the ground as success.
----   opts.side   "left" | "right", when both sides carry a tool
---- Returns ok, err, info {before, after}.
+--- 1. `place` cannot till. It puts down the item in the selected
+---    inventory slot; the equipped tool is not involved. Tilling happens
+---    through `turtle.dig*`, because TurtleTool.dig offers the block to
+---    the tool first and performs that use instead of breaking it.
+---
+--- 2. **The turtle cannot till the block it is standing on.** Vanilla
+---    refuses to till anything with a block above it, and directly above
+---    the floor is the turtle. CC:Tweaked works around this only in the
+---    one case where it can: if the block directly below is *air*,
+---    digDown reaches one further and tills that instead. So tilling down
+---    requires hovering with a gap -- be two above the ground, not one.
+---    Standing on it and digging does nothing at all: the hoe declines to
+---    till, and the break it falls through to is refused as ineffective
+---    because dirt is not in the hoe's breakable tag. Nothing happens,
+---    which reads exactly like a missing hoe and is not.
+---
+--- Returns ok, err, info.
 function block.till(dir, opts)
   opts = opts or {}
-  dir = dir or "down"
+  dir = tostring(dir or "down"):lower()
   if not _G.turtle then return false, "not a turtle" end
+
+  local function toolNames()
+    local names = {}
+    for _, side in ipairs({ "left", "right" }) do
+      local it = caps.equipped and caps.equipped(side)
+      if it and it.name then names[#names + 1] = it.name end
+    end
+    return #names > 0 and table.concat(names, ", ") or "nothing"
+  end
+
+  if dir == "down" then
+    -- The gap is the whole game here, so check it before spending a dig.
+    if block.detect("down") then
+      return false, "cannot till the block you are standing on -- move up "
+                 .. "one so there is air below, then till down",
+             { blocked = "standing on it" }
+    end
+    local ok = API.down.dig(opts.side)
+    -- With air directly below, dig had nothing of its own to break: the
+    -- break path returns "Nothing to dig here". So success can only mean
+    -- the tool was used on the block below the gap.
+    if ok then return true, nil, { tilled = "two below" } end
+    return false, ("nothing tilled -- equipped: %s"):format(toolNames()),
+           { equipped = toolNames() }
+  end
 
   local before = block.inspect(dir)
   if not before then
-    return false, "nothing there to till", { before = nil }
+    return false, "nothing there to till", {}
   end
   if before.name and before.name:find("farmland", 1, true) then
     return true, nil, { before = before.name, after = before.name,
                         alreadyTilled = true }
   end
 
-  local api = API[({ up = "up", down = "down" })[tostring(dir):lower()] or "x"]
-  local ok
-  if api then
-    ok = api.dig(opts.side)
-  else
-    -- A horizontal direction has to be faced first, which orient() does.
-    local a, _, restore, err = orient(dir)
-    if not a then return false, err end
-    ok = a.dig(opts.side)
-    if restore then restore() end
-  end
+  local api, _, restore, err = orient(dir)
+  if not api then return false, err end
+  api.dig(opts.side)
+  if restore then restore() end
 
   local after = block.inspect(dir)
   local info = { before = before.name, after = after and after.name or nil }
   if not after then
-    -- The tool had no use for it, so dig did what dig does.
     return false, ("broke %s instead of tilling it -- that tool has no "
                 .. "use for that block"):format(tostring(before.name)), info
   end
   if after.name ~= before.name then return true, nil, info end
-  return false, ("%s did not change -- is a hoe equipped?")
-    :format(tostring(before.name)), info
+  info.equipped = toolNames()
+  return false, ("%s unchanged -- is something on top of it? equipped: %s")
+    :format(tostring(before.name), info.equipped), info
 end
 
 function block.settle(info)

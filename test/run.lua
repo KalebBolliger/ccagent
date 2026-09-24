@@ -1268,50 +1268,72 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
-group("till: the hoe goes through dig, not place")
+group("till: the turtle cannot till what it stands on")
 fresh()
 do
-  -- This is the whole point of the capability. A program that reaches for
-  -- placeDown() to till gets silence: place puts down an inventory item
-  -- and never touches the equipped tool.
-  mock.set(0, 63, 0, "minecraft:dirt")
+  -- These tests were originally written with the turtle standing on the
+  -- dirt, which is the one geometry that can never work -- the same
+  -- wrong-assumption-in-the-test pattern as the frame lint and the
+  -- zero-is-truthy info contract. The real rule, from CC:Tweaked's
+  -- TurtleTool: vanilla refuses to till a block with anything above it,
+  -- and the turtle IS that block, so digDown only tills when the space
+  -- directly below is air and it can reach one further.
   mock.turtle.slots[1] = { name = "minecraft:diamond_hoe", count = 1 }
   inv.invalidate()
   ok(inv.equip("*hoe"), "hoe equipped")
 
+  -- Standing on it: refused before a dig is even spent.
+  mock.set(0, 63, 0, "minecraft:dirt")
+  local okA, errA, infoA = block.till("down")
+  ok(not okA, "tilling the block underfoot is refused")
+  ok(tostring(errA):find("standing on", 1, true) ~= nil,
+     "and says why, rather than blaming the hoe", errA)
+  ok(infoA.blocked == "standing on it", "with a machine-readable reason")
+  ok(mock.get(0, 63, 0) == "minecraft:dirt",
+     "the ground is untouched -- not broken either", mock.get(0, 63, 0))
+
+  -- Hovering over a gap: this is the geometry that works.
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:diamond_hoe", count = 1 }
+  inv.invalidate()
+  inv.equip("*hoe")
+  mock.turtle.y = 64
+  mock.set(0, 62, 0, "minecraft:dirt")      -- floor
+  mock.set(0, 63, 0, nil)                   -- the gap that makes it legal
+  local okB, errB = block.till("down")
+  ok(okB, "tilling through a gap works", errB)
+  ok(mock.get(0, 62, 0) == "minecraft:farmland",
+     "the floor two below became farmland", mock.get(0, 62, 0))
+
+  -- And a seed goes into the gap, onto that farmland, from the same spot.
+  mock.turtle.slots[2] = { name = "minecraft:wheat_seeds", count = 64 }
+  inv.invalidate()
+  ok(block.place("down", "minecraft:wheat_seeds"),
+     "so till and plant happen from one position")
+
+  -- placeDown still cannot till, which is the mistake that started this.
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:diamond_hoe", count = 1 }
+  inv.invalidate()
+  inv.equip("*hoe")
+  mock.turtle.y = 64
+  mock.set(0, 62, 0, "minecraft:dirt")
   turtle.select(1)
-  local placedOk = turtle.placeDown()
-  ok(not placedOk, "placeDown does not till -- it is not a tool action")
-  ok(mock.get(0, 63, 0) == "minecraft:dirt", "the ground is untouched")
+  ok(not turtle.placeDown(), "placeDown is not a tool action")
+  ok(mock.get(0, 62, 0) == "minecraft:dirt", "and changes nothing")
 
-  local ok1, err1, info1 = block.till("down")
-  ok(ok1, "block.till turns dirt into farmland", err1)
-  ok(mock.get(0, 63, 0) == "minecraft:farmland", "in the world",
-     mock.get(0, 63, 0))
-  ok(info1.before == "minecraft:dirt" and info1.after == "minecraft:farmland",
-     "and says what it changed")
-
-  -- Tilling what is already farmland is a no-op success, not a re-dig.
-  local ok2, _, info2 = block.till("down")
-  ok(ok2 and info2.alreadyTilled, "already-tilled ground is left alone")
-
-  -- The same call breaks a block the tool has no use for. Saying "tilled"
-  -- when you have punched a hole in someone's floor is the failure that
-  -- matters, so it must come back false and name what happened.
-  mock.set(0, 63, 0, "minecraft:stone")
-  local ok3, err3, info3 = block.till("down")
-  ok(not ok3, "a block the hoe cannot till is not reported as tilled")
-  ok(tostring(err3):find("broke", 1, true) ~= nil,
-     "and the error says it was broken", err3)
-  ok(info3.before == "minecraft:stone", "naming what was lost", info3.before)
-
-  -- Nothing below at all.
-  mock.set(0, 63, 0, nil)
-  local ok4, err4 = block.till("down")
-  ok(not ok4 and tostring(err4):find("nothing", 1, true) ~= nil,
-     "tilling air fails cleanly", err4)
+  -- A hoe over stone does not quietly punch a hole in the floor: the
+  -- fall-through break is refused as ineffective.
+  mock.set(0, 62, 0, "minecraft:stone")
+  local okC, errC = block.till("down")
+  ok(not okC, "a block the hoe has no use for is not tilled")
+  ok(mock.get(0, 62, 0) == "minecraft:stone",
+     "and is not broken either", mock.get(0, 62, 0))
+  ok(tostring(errC):find("equipped", 1, true) ~= nil,
+     "the error names what is actually equipped", errC)
 end
 
+fresh()
 --------------------------------------------------------------------------
 group("fill info: a count of zero must not read as a failure")
 fresh()
