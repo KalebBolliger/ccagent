@@ -8,6 +8,39 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- With the timeout gone, the same large job failed as `response hit
+  max_tokens before producing any text`. The message was accurate and its
+  advice was wrong, because the code behind it assumed thinking was off
+  unless asked for. It is the other way round: current models run adaptive
+  thinking when the `thinking` parameter is *omitted*, and those tokens
+  come out of `max_tokens` before the first character of the program. At
+  `maxTokens = 4096` a hard request spent the entire budget thinking and
+  never started writing. The trivial `/doctor` call succeeded at
+  `max_tokens = 16` for the same reason -- adaptive thinking scales with
+  the question, so an easy one barely thinks at all.
+
+  `maxTokens` now defaults to 32000, and `effort` (low..max, default
+  medium) is exposed as the knob that bounds what thinking costs. Turning
+  thinking off is available but is the wrong first move -- the programs
+  are better with it.
+
+- The error for that case now names what was actually in the response:
+  `max_tokens with no text (4096 out, blocks: thinking)`. Thinking blocks
+  come back with empty text by default, so without naming them the
+  failure reads as "the program was too long" -- the opposite of what
+  happened, and the reason the first reading of it was wrong.
+
+- Two request shapes that current models reject with a 400 can no longer
+  be sent by accident. `thinking = { budget = N }` is the pre-4.6
+  spelling; it is still passed through when written out in config, since
+  a config may name an older model, but it is never synthesized. And
+  `temperature` is only sent when no thinking directive is present.
+
+- /doctor reports the model, token budget, thinking and effort, and
+  deliberately distinguishes "unset" from "off" -- treating those two as
+  the same thing is what caused this.
+
+
 - A big job ("dig out an 11x11x2 space...") failed generation with
   `Timed out`, twice, having taken no action. The cause was not our
   timeout. CC:Tweaked puts a Netty read timeout on every `http.request` —

@@ -215,6 +215,43 @@ Two timeouts therefore exist and they are not interchangeable:
 forever). Raising ours does nothing about the failure this section
 describes.
 
+## Thinking is on unless you turn it off (`claude/client.lua`)
+
+The companion trap to the timeout above, and the same shape of mistake:
+a number that looks like a ceiling on the program is really a ceiling on
+something else.
+
+Current models (Sonnet 5, Opus 5, and up) run **adaptive thinking when the
+`thinking` parameter is omitted**. Leaving it unset is not the same as
+switching it off — it is how you ask for the default, and the default is
+on. Those thinking tokens are spent out of `max_tokens` *before* the first
+character of the program. So `maxTokens = 4096` on a hard request fails as:
+
+```
+max_tokens with no text (4096 out, blocks: thinking)
+```
+
+Not "the program was too long" — the program was never started. The
+response's only content block is a `thinking` block, and since
+`thinking.display` defaults to `"omitted"` on these models, that block
+comes back with empty text, so it is invisible unless the error names it.
+That is why `client.parse` reports the block types rather than just the
+stop reason.
+
+The fix is a generous `maxTokens` (32000) plus `effort` as the real cost
+control, not disabling thinking — the generated programs are better with
+it. Reach for `effort = "low"` before `thinking = "off"`.
+
+Two spellings are dead on current models and will 400 if you reintroduce
+them:
+
+- `thinking = { type = "enabled", budget_tokens = N }` — the pre-4.6 form.
+  Still sent if the operator writes `thinking = { budget = N }` in
+  `config.lua`, because a config may name an older model, but never on
+  its own.
+- `temperature` — rejected outright. Only sent when no `thinking`
+  directive is present.
+
 ## Unverified premises
 
 Things the design assumes but that have not been measured against a real
@@ -239,6 +276,11 @@ confirmed this":
   (fuel checks, protected-block refusal, obstacle memory) are bypassed
   without anything failing. Worth spot-checking `/code` output
   periodically, not just trusting the prompt's instructions to work.
+- **`maxTokens = 32000` and `effort = "medium"`** are guesses. 32000 is
+  "comfortably more than the 4096 that failed", not a measured ceiling,
+  and nothing has checked whether `low` would do just as well on a typical
+  turtle job for less money. Both are cheap to tune from `config.lua` and
+  `/doctor` reports them, so start there if jobs feel slow or expensive.
 - **`client.timeout = 180`** is a guess: a backstop generous enough not to
   interrupt a legitimately long generation, short enough that a wedged
   request does not strand the turtle. Nothing measured it. `readTimeout`

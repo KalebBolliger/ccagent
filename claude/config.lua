@@ -16,15 +16,21 @@ local config = {}
 config.defaults = {
   apiKey      = "",
   model       = "claude-sonnet-5",
-  maxTokens   = 4096,
-  temperature = nil,          -- leave nil to let the API default
+  -- Generous on purpose: current models think by default, and those
+  -- tokens come out of this budget before any program is written.
+  maxTokens   = 32000,
+  effort      = "medium",     -- low | medium | high | xhigh | max
+  temperature = nil,          -- rejected by current models; older only
   stream      = true,         -- keep true: see claude/client.lua's header
   timeout     = 180,          -- our ceiling on one attempt, seconds
   readTimeout = 60,           -- CC's silence window, seconds (its max)
   retries     = 3,
   maxRepairs  = 2,            -- automatic fix attempts after a runtime error
   cache       = true,         -- cache_control on the system prompt
-  thinking    = nil,          -- e.g. { budget = 2048 } for extended thinking
+  -- nil lets the model decide (adaptive on current models). false or
+  -- "off" disables it; { budget = N } is the pre-4.6 spelling, which
+  -- current models reject with a 400.
+  thinking    = nil,
   operatorNotes = "",         -- free text appended to the system prompt
 
   -- fleet (host/worker mode)

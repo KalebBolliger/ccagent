@@ -1254,6 +1254,89 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("thinking: the tokens spent before a program is written")
+mock.reset()
+do
+  local client = require("claude.client")
+  local msgs = { { role = "user", content = "hi" } }
+
+  local function sentPayload(cfg)
+    mock.resetHttp()
+    mock.http.reply({ status = 200, body = mock.sse({
+      { "message_start", { type = "message_start", message = { usage = {} } } },
+      { "content_block_start", { type = "content_block_start", index = 0,
+                                 content_block = { type = "text", text = "" } } },
+      { "content_block_delta", { type = "content_block_delta", index = 0,
+                                 delta = { type = "text_delta", text = "x" } } },
+      { "message_delta", { type = "message_delta",
+                           delta = { stop_reason = "end_turn" }, usage = {} } },
+      { "message_stop", { type = "message_stop" } },
+    }) })
+    cfg.apiKey, cfg.retries = "t", 1
+    client.message(cfg, { messages = msgs })
+    return mock.http.requests[1].body
+  end
+
+  -- Omitting `thinking` is not the same as switching it off: current
+  -- models think by default. So we must not send a `thinking` field at
+  -- all unless the operator asked for one.
+  ok(sentPayload({}):find("thinking", 1, true) == nil,
+     "no thinking field is sent by default")
+  ok(sentPayload({ thinking = "off" }):find('"disabled"', 1, true) ~= nil,
+     "off asks for disabled explicitly")
+  ok(sentPayload({ thinking = "adaptive" }):find('"adaptive"', 1, true) ~= nil,
+     "adaptive is spelled the way current models take it")
+
+  -- budget_tokens is a 400 on current models. It must only appear when
+  -- the operator wrote it out, for an older model they chose.
+  local legacy = sentPayload({ thinking = { budget = 2048 } })
+  ok(legacy:find("budget_tokens", 1, true) ~= nil,
+     "the pre-4.6 spelling is still available for an old model")
+  ok(sentPayload({}):find("budget_tokens", 1, true) == nil,
+     "but never appears on its own")
+
+  -- effort is the knob that bounds what thinking costs.
+  ok(sentPayload({ effort = "low" }):find('"effort"', 1, true) ~= nil,
+     "effort rides in output_config")
+  ok(sentPayload({ effort = "low" }):find("output_config", 1, true) ~= nil,
+     "under that exact key")
+  ok(sentPayload({}):find("output_config", 1, true) == nil,
+     "and is omitted when unset")
+
+  -- temperature is rejected outright alongside thinking.
+  ok(sentPayload({ temperature = 0.5, thinking = "adaptive" })
+       :find("temperature", 1, true) == nil,
+     "temperature is not sent alongside a thinking directive")
+
+  -- A default budget big enough that thinking cannot eat all of it. 4096
+  -- was the number that failed in-game.
+  local body = sentPayload({})
+  local maxTok = tonumber(body:match('"max_tokens"%s*:%s*(%d+)'))
+  ok(maxTok and maxTok >= 16000, "max_tokens leaves room to think", maxTok)
+
+  -- And when it does run out, the error says what was in the response.
+  -- "hit max_tokens" alone reads as "the program was too long", which is
+  -- the opposite of what happened.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = mock.sse({
+    { "message_start", { type = "message_start", message = { usage = {} } } },
+    { "content_block_start", { type = "content_block_start", index = 0,
+                               content_block = { type = "thinking", thinking = "" } } },
+    { "message_delta", { type = "message_delta",
+                         delta = { stop_reason = "max_tokens" },
+                         usage = { output_tokens = 4096 } } },
+    { "message_stop", { type = "message_stop" } },
+  }) })
+  local r, e = client.message({ apiKey = "t", retries = 1 }, { messages = msgs })
+  ok(r == nil, "a reply that is all thinking is an error")
+  ok(tostring(e):find("thinking", 1, true) ~= nil,
+     "and names the block type that consumed the budget", e)
+  ok(tostring(e):find("4096", 1, true) ~= nil,
+     "and the tokens it cost", e)
+end
+mock.resetHttp()
+
+--------------------------------------------------------------------------
 group("/doctor: telling a stale install apart from a broken transport")
 mock.reset()
 do
@@ -1267,6 +1350,15 @@ do
      "a config override is reflected, not the module default")
   ok(client.settings({ readTimeout = 900 }).readTimeout == 60,
      "and the reported window is the clamped one -- the number CC will see")
+
+  -- "not configured" and "off" are different, and the difference is what
+  -- broke in-game, so /doctor must not conflate them.
+  ok(client.settings({}).thinking == "on",
+     "unset thinking reports as on, because that is what the model does")
+  ok(client.settings({ thinking = "off" }).thinking == "off",
+     "and off reports as off")
+  ok(client.settings({ maxTokens = 32000 }).maxTokens == 32000,
+     "the token budget is reported")
 
   -- The whole point of /doctor is that it fails loudly rather than
   -- reporting health it did not check.

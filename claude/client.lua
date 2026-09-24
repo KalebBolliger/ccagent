@@ -222,24 +222,50 @@ function client.message(cfg, body)
 
   local payload = {
     model       = cfg.model or "claude-sonnet-5",
-    max_tokens  = cfg.maxTokens or 4096,
+    max_tokens  = cfg.maxTokens or 32000,
     messages    = body.messages,
   }
   if body.system then payload.system = body.system end
-  if cfg.temperature and not (cfg.thinking and cfg.thinking.budget) then
-    payload.temperature = cfg.temperature
-  end
   if body.stop_sequences then payload.stop_sequences = body.stop_sequences end
 
-  -- Extended thinking: the budget must be strictly less than max_tokens,
-  -- and temperature must not be set alongside it. Getting either wrong is
-  -- a 400 with a message that is easy to misread as a model-name problem.
-  if cfg.thinking and cfg.thinking.budget and cfg.thinking.budget > 0 then
+  -- Thinking. The thing to know, because it is the opposite of what the
+  -- old comment here assumed: current models think by DEFAULT. Omitting
+  -- this parameter on Sonnet 5 or Opus 5 runs adaptive thinking, and
+  -- those tokens come out of max_tokens before a single character of
+  -- program is written. That is not a reason to switch it off -- it makes
+  -- the programs better -- but it is the reason max_tokens has to be
+  -- generous and why `effort` is the knob to reach for first.
+  --
+  --   cfg.thinking == nil          -> send nothing; the model decides
+  --   cfg.thinking == false|"off"  -> {type = "disabled"}
+  --   cfg.thinking == true|"adaptive" -> {type = "adaptive"}
+  --   cfg.thinking == {budget = N} -> the pre-4.6 spelling, which current
+  --                                   models reject with a 400. Only for
+  --                                   an older model set in config.
+  if cfg.thinking == false or cfg.thinking == "off" then
+    payload.thinking = { type = "disabled" }
+  elseif cfg.thinking == true or cfg.thinking == "adaptive" then
+    payload.thinking = { type = "adaptive" }
+  elseif type(cfg.thinking) == "table" and cfg.thinking.budget
+         and cfg.thinking.budget > 0 then
     local budget = cfg.thinking.budget
     if payload.max_tokens <= budget then
       payload.max_tokens = budget + (cfg.thinkingHeadroom or 2048)
     end
     payload.thinking = { type = "enabled", budget_tokens = budget }
+  end
+
+  -- How hard to think, and so how much of max_tokens thinking may eat.
+  -- Cheaper and more direct than trying to switch thinking off.
+  if cfg.effort then
+    payload.output_config = { effort = cfg.effort }
+  end
+
+  -- temperature is rejected outright by current models, and cannot be
+  -- combined with a thinking budget on older ones. Only send it if the
+  -- operator asked for it on a model old enough to take it.
+  if cfg.temperature and not payload.thinking then
+    payload.temperature = cfg.temperature
   end
 
   local streaming = (cfg.stream ~= false) and (client.stream ~= false)
@@ -333,8 +359,19 @@ function client.parse(data)
   if #thoughts > 0 then out.thinking = table.concat(thoughts, "\n") end
 
   if out.text == "" and out.stop == "max_tokens" then
-    return nil, "response hit max_tokens before producing any text -- "
-             .. "raise maxTokens, or lower the thinking budget"
+    -- Say what was actually in the response. Without the block types this
+    -- reads as "the program was too long", when the usual cause is the
+    -- opposite: thinking consumed the whole budget and the program was
+    -- never started. Thinking blocks come back with empty text by
+    -- default, so they are invisible unless named.
+    local kinds = {}
+    for _, b in ipairs(data.content or {}) do
+      kinds[#kinds + 1] = tostring(b.type or "?")
+    end
+    return nil, ("max_tokens with no text (%d out, blocks: %s) -- raise "
+              .. "maxTokens or lower effort"):format(
+                 out.usage.output_tokens or 0,
+                 #kinds > 0 and table.concat(kinds, ",") or "none")
   end
   if out.text == "" then
     return nil, "model returned no text (stop_reason: "
@@ -354,6 +391,14 @@ function client.settings(cfg)
     timeout     = cfg.timeout or client.timeout,
     readTimeout = readWindow(cfg.readTimeout or client.readTimeout),
     retries     = cfg.retries or client.retries,
+    model       = cfg.model or "claude-sonnet-5",
+    maxTokens   = cfg.maxTokens or 32000,
+    effort      = cfg.effort or "(model default)",
+    -- nil here means "the model decides", which on current models means
+    -- thinking is on. Reported as such, because "not configured" and
+    -- "off" are not the same thing and the difference is what broke.
+    thinking    = (cfg.thinking == false or cfg.thinking == "off")
+                  and "off" or "on",
   }
 end
 

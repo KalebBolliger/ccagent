@@ -10,7 +10,14 @@ return {
   -- apiKey = "sk-ant-...",          -- prefer /.ccagent/key instead
 
   model      = "claude-sonnet-5",    -- claude-opus-5 for hard jobs
-  maxTokens  = 4096,
+
+  -- Current models think before they write, and that thinking is spent
+  -- out of maxTokens. Too small a budget fails as "max_tokens with no
+  -- text": all of it went to thinking and the program never started.
+  maxTokens  = 32000,
+  effort     = "medium",             -- low | medium | high | xhigh | max
+                                     -- low is faster and cheaper; raise it
+                                     -- for jobs that need real planning
   maxRepairs = 2,                    -- auto-fix attempts after a runtime error
   cache      = true,                 -- keep true: this is most of the savings
 
@@ -21,10 +28,10 @@ return {
   -- timeout     = 180,              -- seconds we will wait for one attempt
   -- readTimeout = 60,               -- seconds of silence CC tolerates (max 60)
 
-  -- Extended thinking. Off by default because most turtle jobs do not need
-  -- it and it triples the latency. budget must be < maxTokens; the client
-  -- raises maxTokens for you if you forget.
-  -- thinking = { budget = 2048 },
+  -- Thinking is ON by default on current models -- leaving this unset is
+  -- not the same as turning it off. Prefer a lower `effort` over
+  -- disabling it; the programs are better with it.
+  -- thinking = "off",
 
   -- Appended verbatim to the system prompt. Good place for house rules:
   -- operatorNotes = [[

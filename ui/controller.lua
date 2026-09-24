@@ -295,6 +295,9 @@ local function command(input, ctx)
     console.head("ccagent " .. agent.VERSION)
     console.info(("stream %s  read %ds  wait %ds"):format(
       s.stream and "on" or "OFF", s.readTimeout, s.timeout))
+    console.info(("%s  %d tok"):format(
+      (s.model:gsub("^claude%-", "")), s.maxTokens))
+    console.info(("think %s  effort %s"):format(s.thinking, s.effort))
     if not s.stream then
       console.warn("streaming off: long jobs will fail")
     end
