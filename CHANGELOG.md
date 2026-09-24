@@ -8,6 +8,27 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- Raising the default `maxTokens` to 32000 did nothing for anyone who
+  already had ccagent installed. `/ccagent/config.lua` is written once and
+  deliberately kept across every update, so an install predating that
+  change still pins 4096 and still fails every hard request with
+  `max_tokens with no text (4096 out, blocks: thinking)`. The number in
+  the error was the operator's, not the default, and nothing said so.
+
+  Three things now close that gap. `boot` compares the shipped
+  `config.lua` against the one it is keeping and says when they differ, so
+  a config that has fallen behind is visible at update time rather than
+  at failure time. `config.warnings` flags a token budget too small for a
+  thinking model, at startup and in `/doctor`, naming the value in force
+  and the file to edit. And the error itself now names
+  `/ccagent/config.lua`, since "raise maxTokens" is not actionable if you
+  do not know where it lives.
+
+  This is the config-file counterpart to saved-program rot: a file
+  preserved across updates keeps asserting something the code has moved
+  past, and stays silent about it.
+
+
 - `block.till` could not till anything, and blamed the wrong thing for it.
   A turtle standing on the ground can never till that ground: vanilla
   refuses to till a block with anything above it, and the turtle is a

@@ -41,6 +41,11 @@ config.defaults = {
   logLevel    = "info",
 }
 
+--- Below this, a thinking model is likely to spend the whole budget
+--- before writing anything. A guess, not a measurement -- see
+--- docs/ARCHITECTURE.md's list of invented numbers.
+config.minTokens = 8000
+
 config.paths = {
   file = "/ccagent/config.lua",
   key  = "/.ccagent/key",
@@ -85,6 +90,27 @@ function config.load()
   util.log.level = cfg.logLevel or "info"
   util.log.file  = cfg.logFile
   return cfg
+end
+
+--- Settings that will probably bite, given what else is set.
+---
+--- A config file is written once and kept across every update, so it
+--- pins values the code has since moved past -- and the failure surfaces
+--- much later as something that does not look like a config problem at
+--- all. maxTokens is the one that has actually cost a run: an install
+--- from before thinking was on by default keeps 4096, and every hard
+--- request dies as "max_tokens with no text".
+--- Returns an array of strings, empty when there is nothing to say.
+function config.warnings(cfg)
+  local out = {}
+  cfg = cfg or {}
+  local thinking = not (cfg.thinking == false or cfg.thinking == "off")
+  local maxTok = tonumber(cfg.maxTokens) or 0
+  if thinking and maxTok > 0 and maxTok < config.minTokens then
+    out[#out + 1] = ("maxTokens %d may all go to thinking"):format(maxTok)
+    out[#out + 1] = "  edit /ccagent/config.lua"
+  end
+  return out
 end
 
 --- Write the API key to its own file (used by the first-run prompt).

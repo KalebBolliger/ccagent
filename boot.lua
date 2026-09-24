@@ -361,11 +361,21 @@ end
 
 ----------------------------------------------------------------- write ---
 
-local wrote, kept = 0, 0
+local wrote, kept, stale = 0, 0, false
 for _, path in ipairs(list) do
   local target = DIR .. "/" .. path
   if path == "config.lua" and fs.exists(target) and not force then
     kept = kept + 1
+    -- Keeping the operator's config is right; saying nothing when the
+    -- shipped one has moved on is not. A config written at install time
+    -- pins values the code has since changed, and it fails later as
+    -- something that looks nothing like a config problem.
+    local h = fs.open(target, "r")
+    if h then
+      local mine = h.readAll()
+      h.close()
+      stale = (mine ~= blobs[path])
+    end
   else
     local dir = fs.getDir(target)
     if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
@@ -382,6 +392,11 @@ writeConf({ source = source, repo = repo, ref = ref, headers = stored })
 print(("  %d file%s written%s")
   :format(wrote, wrote == 1 and "" or "s",
           kept > 0 and ", config.lua kept" or ""))
+if stale then
+  print("  the shipped config.lua has changed;")
+  print("  yours is kept -- compare it, or")
+  print("  boot --force to take the new one")
+end
 
 ----------------------------------------------------------------- setup ---
 

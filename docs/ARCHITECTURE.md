@@ -276,6 +276,9 @@ confirmed this":
   (fuel checks, protected-block refusal, obstacle memory) are bypassed
   without anything failing. Worth spot-checking `/code` output
   periodically, not just trusting the prompt's instructions to work.
+- **`config.minTokens = 8000`**, the floor below which the startup
+  warning fires, is invented. It is meant to be "obviously too small once
+  thinking is on", not a measured boundary.
 - **`maxTokens = 32000` and `effort = "medium"`** are guesses. 32000 is
   "comfortably more than the 4096 that failed", not a measured ceiling,
   and nothing has checked whether `low` would do just as well on a typical

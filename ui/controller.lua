@@ -362,6 +362,7 @@ local function command(input, ctx)
     console.info(("%s  %d tok"):format(
       (s.model:gsub("^claude%-", "")), s.maxTokens))
     console.info(("think %s  effort %s"):format(s.thinking, s.effort))
+    for _, w in ipairs(config.warnings(cfg)) do console.warn(w) end
     if not s.stream then
       console.warn("streaming off: long jobs will fail")
     end
@@ -391,6 +392,7 @@ function M.run(argv)
   if not cfg then return end
 
   console.head("ccagent " .. agent.VERSION)
+  for _, w in ipairs(config.warnings(cfg)) do console.warn(w) end
   console.status("probing...")
   agent.boot()
   console.info(agent.situation())

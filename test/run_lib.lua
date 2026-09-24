@@ -747,6 +747,35 @@ do
 end
 
 --------------------------------------------------------------------------
+group("config: a file kept across updates pins values the code moved past")
+do
+  local config = require("claude.config")
+
+  -- The exact shape that cost a run: an install from before thinking was
+  -- on by default keeps maxTokens = 4096, every update preserves it, and
+  -- the failure arrives much later looking nothing like a config problem.
+  local w = config.warnings({ maxTokens = 4096 })
+  ok(#w > 0, "a low token budget is called out")
+  ok(table.concat(w, " "):find("4096", 1, true) ~= nil,
+     "naming the value actually in force", w[1])
+  ok(table.concat(w, " "):find("/ccagent/config.lua", 1, true) ~= nil,
+     "and the file to edit -- the number alone is not actionable")
+
+  ok(#config.warnings({ maxTokens = 32000 }) == 0,
+     "the current default says nothing")
+  ok(#config.warnings({ maxTokens = 4096, thinking = "off" }) == 0,
+     "and neither does a small budget with thinking off, which is a "
+     .. "coherent choice rather than a stale file")
+  ok(#config.warnings({}) == 0, "an unset budget is not guessed at")
+
+  -- Every warning has to fit a turtle screen or it scrolls its own
+  -- explanation away.
+  for _, line in ipairs(config.warnings({ maxTokens = 4096 })) do
+    ok(#line <= 37, "warning fits the screen with its prefix", line)
+  end
+end
+
+--------------------------------------------------------------------------
 group("revise: showing what changed, not the whole program")
 do
   local util = require("agent.util")

@@ -369,9 +369,9 @@ function client.parse(data)
       kinds[#kinds + 1] = tostring(b.type or "?")
     end
     return nil, ("max_tokens with no text (%d out, blocks: %s) -- raise "
-              .. "maxTokens or lower effort"):format(
-                 out.usage.output_tokens or 0,
-                 #kinds > 0 and table.concat(kinds, ",") or "none")
+              .. "maxTokens in /ccagent/config.lua, or lower effort")
+              :format(out.usage.output_tokens or 0,
+                      #kinds > 0 and table.concat(kinds, ",") or "none")
   end
   if out.text == "" then
     return nil, "model returned no text (stop_reason: "
