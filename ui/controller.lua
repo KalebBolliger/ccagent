@@ -230,7 +230,29 @@ local function command(input, ctx)
         if not newSrc then console.err(tostring(rerr))
         elseif newSrc == src then console.head(name .. " is already current")
         else
-          console.code(newSrc)
+          -- What changed, not the whole program. Thirteen rows of source
+          -- with no scrollback answers no question anyone has.
+          local added, removed = agent.util.lineDelta(src, newSrc)
+          if #added == 0 and #removed == 0 then
+            console.head(name .. " is already current")
+            return true
+          end
+          console.head(("%d lines added, %d removed"):format(#added, #removed))
+          local shown = 0
+          for _, l in ipairs(removed) do
+            if shown >= 4 then break end
+            console.dim("- " .. agent.util.trim(l):sub(1, 36))
+            shown = shown + 1
+          end
+          shown = 0
+          for _, l in ipairs(added) do
+            if shown >= 6 then break end
+            console.say("+ " .. agent.util.trim(l):sub(1, 36))
+            shown = shown + 1
+          end
+          if #added > 6 then
+            console.dim(("  ...and %d more"):format(#added - 6))
+          end
           -- Overwriting the only copy of something that works is worse
           -- than spending another request, so ask first.
           local yn = console.ask("replace " .. name .. "? [y/N] ")

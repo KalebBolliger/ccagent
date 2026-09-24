@@ -747,5 +747,31 @@ do
 end
 
 --------------------------------------------------------------------------
+group("revise: showing what changed, not the whole program")
+do
+  local util = require("agent.util")
+  local before = "local a = 1\nturtle.placeDown()\nlocal c = 3\n"
+  local after  = "local a = 1\nblock.till('down')\nlocal c = 3\n"
+  local added, removed = util.lineDelta(before, after)
+  ok(#added == 1 and added[1]:find("block.till", 1, true),
+     "the new line is named", added[1])
+  ok(#removed == 1 and removed[1]:find("placeDown", 1, true),
+     "and so is the one it replaced", removed[1])
+
+  -- Identical sources have nothing to show, which is how /revise knows to
+  -- say "already current" instead of asking to replace like for like.
+  local a2, r2 = util.lineDelta(before, before)
+  ok(#a2 == 0 and #r2 == 0, "an unchanged program reports no delta")
+
+  -- Blank lines are not a change worth a person's attention.
+  local a3 = util.lineDelta("x = 1\n", "x = 1\n\n\n")
+  ok(#a3 == 0, "added blank lines are not reported")
+
+  -- A line that only moved did not change.
+  local a4, r4 = util.lineDelta("a\nb\n", "b\na\n")
+  ok(#a4 == 0 and #r4 == 0, "reordering is not an edit")
+end
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

@@ -96,6 +96,33 @@ function util.clip(s, max)
   return s:sub(1, half) .. "\n...\n" .. s:sub(-half)
 end
 
+--- Which lines one source gained and lost against another.
+---
+--- Not a real diff -- a multiset difference on whole lines, which is the
+--- honest thing to do on a 39-column screen with no scrollback. "Here is
+--- the whole new program, spot the change" is not an answer a person can
+--- act on; "these three lines are new" is. A line that merely moved
+--- appears in neither list, which is what we want: it did not change.
+--- Returns added, removed (arrays of strings, in the order they appear).
+function util.lineDelta(before, after)
+  local counts = {}
+  for line in tostring(before or ""):gmatch("[^\n]*") do
+    counts[line] = (counts[line] or 0) + 1
+  end
+  local added = {}
+  for line in tostring(after or ""):gmatch("[^\n]*") do
+    if (counts[line] or 0) > 0 then counts[line] = counts[line] - 1
+    elseif util.trim(line) ~= "" then added[#added + 1] = line end
+  end
+  local removed = {}
+  for line, n in pairs(counts) do
+    if n > 0 and util.trim(line) ~= "" then
+      for _ = 1, n do removed[#removed + 1] = line end
+    end
+  end
+  return added, removed
+end
+
 ----------------------------------------------------------------- errors ---
 
 --- pcall that returns (ok, result, traceback-ish detail).
