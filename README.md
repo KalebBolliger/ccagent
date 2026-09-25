@@ -509,18 +509,19 @@ slow and drops exactly the detail that mattered.
 the tail of `/.ccagent/log.txt`), posts it to a sink you configure, and
 prints the link it answers with.
 
-**Assume anything you post is public and permanent.** Retention is the
-sink operator's setting, not something a client can ask for — the widely
-used implementation of this shape has no per-paste expiry parameter at
-all, so there is no request that would guarantee one, and nothing
-published here has a stated policy on ownership or deletion. So `redact`
-is the control that actually works: it decides what leaves the turtle.
-`/share` also says how much it is about to send, notes when no redact
-rules are set, and refuses outright if the text contains your API key.
+It defaults to `https://paste.rs`, whose server software reaps uploads
+after a configurable age — 30 days out of the box. **That is the
+operator's setting, not a promise to you**: there is no per-paste expiry
+parameter to ask for one, no documented deletion endpoint, and no
+published policy on ownership. So treat what you post as public and
+lasting, and use `redact` for anything you would mind keeping around.
+`/share` says how much it is about to send, notes when no redact rules
+are set, asks before sending, and refuses outright if the text contains
+your API key.
 
-No sink ships as a default, and none is named in the code. The request is
-*described* in `config.lua` rather than built in, so a sink of your own is
-a config change rather than a patch:
+The request is *described* in `config.lua` rather than built into the
+code, so pointing it at a sink of your own is a config change rather than
+a patch. Override any field; set `url = ""` to disable `/share`:
 
 ```lua
 share = {
@@ -609,7 +610,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 580
+`lua5.3 test/all.lua` runs the three suites against a mock world — 587
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

@@ -875,6 +875,30 @@ do
   ok(share.redact("keep me", nil) == "keep me", "no rules changes nothing")
   local okPat = pcall(share.redact, "x", { "%(" })
   ok(okPat, "a malformed pattern warns rather than throwing")
+
+  -- A default ships so the command works without configuring anything.
+  local config = require("claude.config")
+  local d = config.defaults.share
+  ok(d and d.url and d.url ~= "", "a sink is configured out of the box", d and d.url)
+  ok(d.link == "body", "with the link rule its answer actually uses")
+  ok(d.params == nil,
+     "and no expiry parameter, because that sink has none to accept")
+
+  -- The merge is recursive, so `share = {}` in an operator's config keeps
+  -- the default rather than clearing it. Turning /share off means saying
+  -- so, and an empty url is what does it.
+  local util = require("agent.util")
+  local kept = util.merge(config.defaults, { share = {} })
+  ok(kept.share.url == d.url,
+     "an empty override does not disable the sink -- it merges", kept.share.url)
+  local off = util.merge(config.defaults, { share = { url = "" } })
+  ok(off.share.url == "", "an empty url is how it is turned off")
+  ok(select(2, share.send(off.share, "x")):find("no sink", 1, true) ~= nil,
+     "and send refuses when it is")
+
+  -- Overriding one field keeps the rest, which is the point of merging.
+  local mine = util.merge(config.defaults, { share = { url = "https://m.invalid" } })
+  ok(mine.share.link == "body", "one field can be changed without the others")
 end
 
 --------------------------------------------------------------------------

@@ -49,6 +49,13 @@ return {
   -- report contains your position. `redact` is the control that actually
   -- works, because it decides what leaves the turtle.
   --
+  -- Defaults to https://paste.rs, whose server software reaps uploads
+  -- after a configurable age (30 days out of the box). That is the
+  -- operator's setting, not a promise to you, and there is no per-paste
+  -- expiry parameter to ask for one -- so still assume public, and use
+  -- `redact` for anything you would mind keeping.
+  --
+  -- Override any field; set url = "" to disable /share entirely.
   -- share = {
   --   url     = "https://paste.mylan/",  -- required
   --   link    = "body",                  -- body | header:location | json:<key>

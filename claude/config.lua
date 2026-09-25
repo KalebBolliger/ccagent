@@ -37,10 +37,17 @@ config.defaults = {
   protocol    = "ccagent",
   hostname    = "ccagent-host",
 
-  -- Where /share posts a run report, described rather than named. Unset
-  -- by design: choosing a sink for the operator chooses who keeps their
-  -- coordinates, probably forever. See ui/share.lua for the fields.
-  share       = {},
+  -- Where /share posts a run report. A default is shipped so the command
+  -- works out of the box, and it is overridable field by field because
+  -- the request is described rather than built in (see ui/share.lua).
+  --
+  -- The safeguard against a bad default is not the absence of one: /share
+  -- says what it is about to publish and asks first. To turn it off,
+  -- set url = "" -- `share = {}` merges over this and changes nothing.
+  share       = {
+    url  = "https://paste.rs",
+    link = "body",
+  },
 
   logFile     = "/.ccagent/log.txt",
   logLevel    = "info",

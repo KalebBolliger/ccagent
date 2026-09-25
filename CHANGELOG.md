@@ -22,11 +22,19 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
             field = ..., params = ..., headers = ..., redact = { ... } }
   ```
 
-- Retention is treated as absent rather than assumed. A client cannot ask
-  for expiry it was not offered: the widely used implementation of this
-  shape configures a maximum age server-side, with no per-paste parameter
-  and no documented deletion endpoint, and publishes no policy on
-  ownership. So nothing here relies on a report ageing out.
+- `https://paste.rs` ships as the default sink, so `/share` works without
+  configuring anything. Its server software reaps uploads after a
+  configurable age, 30 days out of the box, which is a materially better
+  position than a sink that keeps everything — but it is the operator's
+  setting rather than a promise, there is no per-paste expiry parameter to
+  request one with, no documented deletion endpoint, and no published
+  policy on ownership. So nothing here relies on a report ageing out.
+
+  The safeguard against a bad default is not the absence of one: `/share`
+  says what it is about to publish, notes when no redact rules are set,
+  and asks. Setting `url = ""` disables it — note that `share = {}` does
+  not, because config merging is recursive and an empty table changes
+  nothing.
 
   `share.redact` takes a list of patterns applied before sending, which
   is the only control that genuinely works when retention belongs to

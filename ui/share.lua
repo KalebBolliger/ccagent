@@ -7,24 +7,26 @@
   already scrolled past. Transcribing a screen by hand is slow and drops
   exactly the detail that decides between two explanations.
 
-  WHAT THIS ASSUMES ABOUT THE SINK: nothing you have not configured.
+  WHAT THIS ASSUMES ABOUT THE SINK: only what config describes.
 
-  No service is named here or shipped as a default, and the request is
-  described in config rather than written into this file, because the
-  shape of "paste somewhere" varies more than it looks: some sinks want
-  the raw body, some a multipart field, some answer with the link in the
-  body, some in a header, some in a JSON key. Any of those can be
-  expressed without editing code, so pointing this at a self-hosted sink
-  is a config change.
+  The request is described in config rather than written into this file,
+  because the shape of "paste somewhere" varies more than it looks: some
+  sinks want the raw body, some a multipart field, some answer with the
+  link in the body, some in a header, some in a JSON key. All of those
+  are expressible without editing code, so pointing this at a self-hosted
+  sink is a config change, not a patch.
 
-  WHAT IT ASSUMES ABOUT RETENTION: that there is none.
+  A default ships (paste.rs) so the command works out of the box. Its
+  server software reaps uploads after a configurable age, 30 days by
+  default, which is a materially better position than a sink that keeps
+  everything -- but it is the operator's setting rather than a promise,
+  and there is no per-paste expiry parameter to request one with.
 
-  Treat anything posted as public and permanent. Expiry is the sink
-  operator's setting, not something a client can ask for -- the one
-  widely used implementation of this shape has no per-paste expiry
-  parameter at all, so there is no request we could send that would
-  guarantee it. `redact` is therefore the control that actually works,
-  because it decides what leaves the turtle in the first place.
+  WHAT IT ASSUMES ABOUT RETENTION: nothing.
+
+  Treat anything posted as public and lasting. `redact` is the control
+  that actually works, because it decides what leaves the turtle rather
+  than what happens to it afterwards.
 --------------------------------------------------------------------------]]
 
 local util = require("agent.util")
