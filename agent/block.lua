@@ -33,7 +33,6 @@ local API = {
               dig     = function(s) return turtle.dig(s) end,
               place   = function(t) return turtle.place(t) end,
               attack  = function(s) return turtle.attack(s) end,
-              compare = function() return turtle.compare() end,
               drop    = function(n) return turtle.drop(n) end,
               suck    = function(n) return turtle.suck(n) end },
   up      = { inspect = function() return turtle.inspectUp() end,
@@ -41,7 +40,6 @@ local API = {
               dig     = function(s) return turtle.digUp(s) end,
               place   = function(t) return turtle.placeUp(t) end,
               attack  = function(s) return turtle.attackUp(s) end,
-              compare = function() return turtle.compareUp() end,
               drop    = function(n) return turtle.dropUp(n) end,
               suck    = function(n) return turtle.suckUp(n) end },
   down    = { inspect = function() return turtle.inspectDown() end,
@@ -49,7 +47,6 @@ local API = {
               dig     = function(s) return turtle.digDown(s) end,
               place   = function(t) return turtle.placeDown(t) end,
               attack  = function(s) return turtle.attackDown(s) end,
-              compare = function() return turtle.compareDown() end,
               drop    = function(n) return turtle.dropDown(n) end,
               suck    = function(n) return turtle.suckDown(n) end },
 }

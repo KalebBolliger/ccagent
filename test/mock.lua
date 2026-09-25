@@ -788,6 +788,13 @@ mock.provenance = {
 --- claim to be the whole API -- a claim to be what our code can reach, so
 --- a function the library calls and the mock lacks is a test failure
 --- rather than a nil-index in some path nothing happens to cover.
+---
+--- "Our code" includes the programs Claude writes: the sandbox resolves
+--- `turtle` live through __index, so a generated program can call
+--- anything here whether or not agent/ does. compare is exactly that
+--- case -- the library's own direction table declared it and never used
+--- it, those three lines are gone, and the function stays because a
+--- generated program may still reach for it.
 mock.apiSurface = {
   "forward", "back", "up", "down", "turnLeft", "turnRight",
   "dig", "digUp", "digDown", "place", "placeUp", "placeDown",

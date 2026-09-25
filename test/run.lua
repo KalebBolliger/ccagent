@@ -1354,11 +1354,10 @@ fresh()
 group("drop, suck, compare, transferTo: paths that had no coverage")
 fresh()
 do
-  -- agent/block.lua's direction table declares compare for all three
-  -- directions and nothing calls it -- there is no block.compare. So the
-  -- missing mock function was latent rather than live: the day anything
-  -- used that entry it would have raised "attempt to call a nil value",
-  -- and no test could have caught it first.
+  -- The library declared compare in its direction table and never called
+  -- it; those three lines are deleted. The function is still worth
+  -- getting right, because the sandbox hands generated programs the live
+  -- turtle table and one of them may reach for it.
   mock.set(0, 64, -1, "minecraft:stone")
   mock.turtle.slots[1] = { name = "minecraft:stone", count = 4 }
   inv.invalidate()

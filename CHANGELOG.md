@@ -79,11 +79,13 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   - `craft` bounds its count 0..64 and errors outside it
     (`CraftingTablePeripheral`).
 
-- A dead entry worth someone's decision: `agent/block.lua`'s direction
-  table declares `compare` for all three directions and no public
-  function uses it. It is either a missing capability or three lines to
-  delete; left alone here because a fidelity pass should not quietly
-  change the library's surface.
+- `agent/block.lua`'s direction table declared `compare` for all three
+  directions and nothing called it; there was never a `block.compare`.
+  Deleted rather than promoted to a capability: `block.is` already
+  answers the question people actually ask, and a narrower tool costs
+  manifest tokens on every request whether or not the model reaches for
+  it. The mock keeps its implementation, because the sandbox resolves
+  `turtle` live and a generated program can still call it.
 
 
 **Testing**
