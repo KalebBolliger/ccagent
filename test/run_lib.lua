@@ -806,24 +806,75 @@ do
   ok(not share.carriesSecret(text, ""), "an unset key is not a match for "
      .. "everything -- that would block every report")
 
-  -- Posting.
+  -- Posting. The sink is described in config, never named in code, so
+  -- swapping one for another is an edit to config.lua.
   mock.resetHttp()
   mock.http.reply({ status = 200, body = "https://example.invalid/abc\n" })
-  local where, err = share.post("https://sink.invalid", text)
+  local where, err = share.send({ url = "https://sink.invalid" }, text)
   ok(where == "https://example.invalid/abc", "the sink's url is returned", err)
   ok(mock.http.requests[1].body:find("boom", 1, true) ~= nil,
      "and the bundle is what was sent")
 
   mock.resetHttp()
-  ok(select(2, share.post("", text)):find("no sink", 1, true) ~= nil,
+  ok(select(2, share.send({}, text)):find("no sink", 1, true) ~= nil,
      "an unconfigured sink is refused before any request")
   ok(#mock.http.requests == 0, "with nothing sent")
 
   mock.resetHttp()
   mock.http.reply({ status = 200, body = "   " })
-  local w2, e2 = share.post("https://sink.invalid", text)
+  local w2, e2 = share.send({ url = "https://sink.invalid" }, text)
   ok(w2 == nil and tostring(e2):find("nothing", 1, true) ~= nil,
      "a sink that answers with nothing is an error, not a blank url", e2)
+
+  -- The three shapes a sink answers in, none of them named here.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = "ignored",
+                    headers = { Location = "https://example.invalid/h" } })
+  ok(share.send({ url = "https://s.invalid", link = "header:location" }, text)
+       == "https://example.invalid/h", "a link in a header is found")
+
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = '{"html_url":"https://example.invalid/j"}' })
+  ok(share.send({ url = "https://s.invalid", link = "json:html_url" }, text)
+       == "https://example.invalid/j", "a link in a JSON key is found")
+
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = "x" })
+  local _, e3 = share.send({ url = "https://s.invalid", link = "json:nope" }, text)
+  ok(tostring(e3):find("JSON", 1, true) ~= nil,
+     "and a sink that does not answer that way says so", e3)
+
+  -- A sink wanting a form field rather than a raw body.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = "https://example.invalid/f" })
+  share.send({ url = "https://s.invalid", field = "file" }, text)
+  local req = mock.http.requests[1]
+  ok(req.headers["content-type"]:find("multipart/form-data", 1, true) ~= nil,
+     "the content type says multipart", req.headers["content-type"])
+  ok(req.body:find('name="file"', 1, true) ~= nil, "under the configured name")
+  ok(req.body:find("boom", 1, true) ~= nil, "and the report is still in there")
+
+  -- Whatever the sink wants for expiry or visibility rides in params,
+  -- because no client can require retention it was not offered.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = "https://example.invalid/p" })
+  share.send({ url = "https://s.invalid", params = { expires = "1d" } }, text)
+  ok(mock.http.requests[1].url:find("expires=1d", 1, true) ~= nil,
+     "params are appended", mock.http.requests[1].url)
+
+  -- Redaction decides what leaves the turtle, which is the only control
+  -- that works when retention is somebody else's setting.
+  mock.resetHttp()
+  mock.http.reply({ status = 200, body = "https://example.invalid/r" })
+  share.send({ url = "https://s.invalid", redact = { "boom" } }, text)
+  ok(mock.http.requests[1].body:find("boom", 1, true) == nil,
+     "a redacted pattern does not leave")
+  ok(mock.http.requests[1].body:find("redacted", 1, true) ~= nil,
+     "and its absence is visible rather than silent")
+
+  ok(share.redact("keep me", nil) == "keep me", "no rules changes nothing")
+  local okPat = pcall(share.redact, "x", { "%(" })
+  ok(okPat, "a malformed pattern warns rather than throwing")
 end
 
 --------------------------------------------------------------------------

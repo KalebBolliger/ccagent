@@ -6,6 +6,35 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Changed**
+
+- `/share`'s sink is now *described* in config rather than assumed by the
+  code, and no service is named anywhere in this repository.
+
+  The first version took a url, posted the raw body, and treated the
+  response body as the link. That is one shape among several — some sinks
+  want a multipart field, some answer with the link in a header or a JSON
+  key, some want auth or query parameters — so "swap in another provider"
+  meant patching `ui/share.lua`. It is a config edit now:
+
+  ```lua
+  share = { url = ..., link = "body" | "header:<name>" | "json:<key>",
+            field = ..., params = ..., headers = ..., redact = { ... } }
+  ```
+
+- Retention is treated as absent rather than assumed. A client cannot ask
+  for expiry it was not offered: the widely used implementation of this
+  shape configures a maximum age server-side, with no per-paste parameter
+  and no documented deletion endpoint, and publishes no policy on
+  ownership. So nothing here relies on a report ageing out.
+
+  `share.redact` takes a list of patterns applied before sending, which
+  is the only control that genuinely works when retention belongs to
+  somebody else — it decides what leaves the turtle rather than what
+  happens to it afterwards. `/share` says when no rules are set, so the
+  absence is a visible choice rather than a default nobody noticed.
+
+
 **Fixed**
 
 - `block.detect` recorded air in world memory whenever it returned false.

@@ -506,16 +506,36 @@ about the world — has already scrolled away. Transcribing it by hand is
 slow and drops exactly the detail that mattered.
 
 `/share` bundles the last run (state, request, program, output, error, and
-the tail of `/.ccagent/log.txt`) and POSTs it to whatever you set
-`shareUrl` to, printing the url the sink answers with. Any service that
-takes a POST body and returns a url works — `https://paste.rs` and
-`https://0x0.st` both do.
+the tail of `/.ccagent/log.txt`), posts it to a sink you configure, and
+prints the link it answers with.
 
-No sink ships as a default, because choosing one for you chooses who
-receives your coordinates. **What you post is public**, and the report
-includes the turtle's position; `/share` says how much it is about to send
-and asks before sending. It refuses outright if the text somehow contains
-your API key.
+**Assume anything you post is public and permanent.** Retention is the
+sink operator's setting, not something a client can ask for — the widely
+used implementation of this shape has no per-paste expiry parameter at
+all, so there is no request that would guarantee one, and nothing
+published here has a stated policy on ownership or deletion. So `redact`
+is the control that actually works: it decides what leaves the turtle.
+`/share` also says how much it is about to send, notes when no redact
+rules are set, and refuses outright if the text contains your API key.
+
+No sink ships as a default, and none is named in the code. The request is
+*described* in `config.lua` rather than built in, so a sink of your own is
+a config change rather than a patch:
+
+```lua
+share = {
+  url     = "https://paste.mylan/",  -- required
+  link    = "body",                  -- body | header:location | json:<key>
+  field   = nil,                     -- send multipart under this field name
+  params  = { expires = "1d" },      -- whatever your sink accepts
+  headers = { authorization = "..." },
+  redact  = { "x=%-?%d+,y=%-?%d+,z=%-?%d+" },
+}
+```
+
+That covers the three shapes these services come in — raw body, multipart
+field, and a link returned in a header or a JSON key — without this
+repository having an opinion about which one you use.
 
 `/update` closes the other half of the loop: pull the current code and
 reboot, without leaving the controller. The pull is all-or-nothing, so a
@@ -589,7 +609,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 569
+`lua5.3 test/all.lua` runs the three suites against a mock world — 580
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

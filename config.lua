@@ -39,12 +39,24 @@ return {
   --   Never dig above y=70 near the base.
   -- ]],
 
-  -- /share posts the last run (state, program, output, log tail) to this
-  -- and prints the url it answers with, so a failure can be read off the
-  -- turtle instead of transcribed from a 39x13 screen. Anything that
-  -- takes a POST body and returns a url will do. Whatever you point it
-  -- at is PUBLIC, and the report includes your coordinates.
-  -- shareUrl = "https://paste.rs",
+  -- /share posts the last run (state, program, output, log tail) somewhere
+  -- you can read it, instead of transcribing a 39x13 screen. The request
+  -- is described here rather than built into the code, so a sink of your
+  -- own works as well as a public one.
+  --
+  -- ASSUME WHATEVER YOU POST IS PUBLIC AND PERMANENT. Retention is the
+  -- sink operator's setting, not something a client can ask for, and the
+  -- report contains your position. `redact` is the control that actually
+  -- works, because it decides what leaves the turtle.
+  --
+  -- share = {
+  --   url     = "https://paste.mylan/",  -- required
+  --   link    = "body",                  -- body | header:location | json:<key>
+  --   field   = nil,                     -- send multipart under this field
+  --   params  = { expires = "1d" },      -- whatever your sink accepts
+  --   headers = { authorization = "..." },
+  --   redact  = { "x=%-?%d+,y=%-?%d+,z=%-?%d+" },
+  -- },
 
   protocol = "ccagent",              -- rednet protocol for host/worker mode
   hostname = "ccagent-host",

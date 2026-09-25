@@ -4,17 +4,27 @@
   A CC terminal is 39x13 with no scrollback, so the moment a program
   misbehaves the useful evidence -- the generated source, the output
   before the error, what the turtle believed about the world -- has
-  already scrolled past and cannot be recovered. Debugging by
-  transcribing a screen is slow and lossy, and it loses exactly the
-  detail that decides between two explanations.
+  already scrolled past. Transcribing a screen by hand is slow and drops
+  exactly the detail that decides between two explanations.
 
-  So: bundle it and POST it somewhere, print the short url the sink
-  answers with, and read it from anywhere. The turtle already has http --
-  it is talking to the Messages API -- and it already keeps a log.
+  WHAT THIS ASSUMES ABOUT THE SINK: nothing you have not configured.
 
-  No sink is built in. Any service that takes a POST body and answers
-  with a url works (`paste.rs` and `0x0.st` both do); picking one for
-  somebody is picking who gets their coordinates.
+  No service is named here or shipped as a default, and the request is
+  described in config rather than written into this file, because the
+  shape of "paste somewhere" varies more than it looks: some sinks want
+  the raw body, some a multipart field, some answer with the link in the
+  body, some in a header, some in a JSON key. Any of those can be
+  expressed without editing code, so pointing this at a self-hosted sink
+  is a config change.
+
+  WHAT IT ASSUMES ABOUT RETENTION: that there is none.
+
+  Treat anything posted as public and permanent. Expiry is the sink
+  operator's setting, not something a client can ask for -- the one
+  widely used implementation of this shape has no per-paste expiry
+  parameter at all, so there is no request we could send that would
+  guarantee it. `redact` is therefore the control that actually works,
+  because it decides what leaves the turtle in the first place.
 --------------------------------------------------------------------------]]
 
 local util = require("agent.util")
@@ -99,39 +109,140 @@ function share.gather(ctx)
   })
 end
 
+--- Scrub before sending, because nothing downstream can be taken back.
+--- `patterns` is a list of Lua patterns; each match becomes [redacted].
+--- Deliberately not clever: a rule the operator wrote and can read beats
+--- a heuristic that decides on their behalf what counts as private.
+function share.redact(text, patterns)
+  if not patterns or #patterns == 0 then return text end
+  for _, pat in ipairs(patterns) do
+    local ok, out = pcall(string.gsub, text, pat, "[redacted]")
+    if ok then text = out
+    else util.log.warn("share: bad redact pattern %s", tostring(pat)) end
+  end
+  return text
+end
+
 --- Refuse to publish anything carrying the key. The bundle is not built
 --- from config, so this should never fire -- which is exactly why it is
 --- cheap to keep: the day someone adds the config dump to it, this is
---- what stops an api key reaching a public paste.
+--- what stops an api key reaching a sink that never forgets.
 function share.carriesSecret(text, secret)
   if not secret or secret == "" then return false end
   return text:find(secret, 1, true) ~= nil
 end
 
---- POST the bundle. Returns the sink's answer (a url, for the services
---- worth using) or nil, err.
+--------------------------------------------------------------- sending ---
+
+local function urlencode(s)
+  return (tostring(s):gsub("[^%w%-%._~]", function(c)
+    return ("%%%02X"):format(c:byte())
+  end))
+end
+
+--- Build the multipart body for a sink that wants a form field.
+local function multipart(field, text, boundary)
+  return table.concat({
+    "--" .. boundary,
+    ('Content-Disposition: form-data; name="%s"; filename="report.txt"')
+      :format(field),
+    "Content-Type: text/plain",
+    "",
+    text,
+    "--" .. boundary .. "--",
+    "",
+  }, "\r\n")
+end
+
+--- Pull the link out of whatever the sink answered with.
+---   "body"            the whole body is the link (trimmed)
+---   "header:<name>"   a response header, e.g. header:location
+---   "json:<key>"      a top-level key of a JSON object
+function share.link(where, body, headers)
+  where = where or "body"
+  local kind, arg = where:match("^(%a+):(.+)$")
+  if not kind then kind = where end
+
+  if kind == "body" then return util.trim(body or "") end
+
+  if kind == "header" then
+    for k, v in pairs(headers or {}) do
+      if tostring(k):lower() == arg:lower() then return util.trim(tostring(v)) end
+    end
+    return nil, ("the sink sent no %s header"):format(arg)
+  end
+
+  if kind == "json" then
+    local fn = textutils and (textutils.unserialiseJSON or textutils.unserializeJSON)
+    if not fn then return nil, "no JSON decoder" end
+    local ok, data = pcall(fn, body or "")
+    if not ok or type(data) ~= "table" then return nil, "the sink sent no JSON" end
+    local v = data[arg]
+    if v == nil then return nil, ("the sink's JSON has no %s"):format(arg) end
+    return util.trim(tostring(v))
+  end
+
+  return nil, ("unknown link rule %s"):format(tostring(where))
+end
+
+--- Send a report to a configured sink.
+---   dest {
+---     url     = "https://...",          -- required
+---     headers = { name = value },       -- merged over the default
+---     field   = "file",                 -- send multipart under this name
+---     params  = { expires = "1d" },     -- appended as a query string
+---     link    = "body" | "header:location" | "json:<key>",
+---     redact  = { "pattern", ... },
+---   }
+--- Returns the link, or nil, err.
 ---
---- Blocking http.post rather than the async dance in claude/client.lua:
---- a few kilobytes to a paste service returns quickly, and there is no
---- spinner to keep alive or generation to abort.
-function share.post(url, text, headers)
+--- Blocking http.post rather than the async dance in claude/client.lua: a
+--- few kilobytes returns quickly, and there is no spinner to keep alive.
+function share.send(dest, text)
+  dest = dest or {}
   if not _G.http then return nil, "the http API is disabled in this world" end
-  if not url or url == "" then return nil, "no sink configured" end
-  local res, err, errRes = http.post(url, text, headers)
+  if not dest.url or dest.url == "" then return nil, "no sink configured" end
+
+  text = share.redact(text, dest.redact)
+
+  local url = dest.url
+  if dest.params and next(dest.params) then
+    local q = {}
+    for k, v in pairs(dest.params) do
+      q[#q + 1] = urlencode(k) .. "=" .. urlencode(v)
+    end
+    table.sort(q)
+    url = url .. (url:find("?", 1, true) and "&" or "?") .. table.concat(q, "&")
+  end
+
+  local body, headers = text, { ["content-type"] = "text/plain" }
+  if dest.field and dest.field ~= "" then
+    local boundary = "ccagent" .. tostring(os.epoch and os.epoch("utc") or 0)
+    body = multipart(dest.field, text, boundary)
+    headers["content-type"] = "multipart/form-data; boundary=" .. boundary
+  end
+  for k, v in pairs(dest.headers or {}) do headers[k] = v end
+
+  local res, err, errRes = http.post(url, body, headers)
   if not res then
     local detail = err or "request failed"
     if errRes then
-      local body = errRes.readAll and errRes.readAll() or nil
+      local b = errRes.readAll and errRes.readAll() or nil
       if errRes.close then errRes.close() end
-      if body and body ~= "" then detail = detail .. ": " .. util.clip(body, 120) end
+      if b and b ~= "" then detail = detail .. ": " .. util.clip(b, 120) end
     end
     return nil, detail
   end
-  local body = res.readAll and res.readAll() or ""
+
+  local answer = res.readAll and res.readAll() or ""
+  local hdrs = res.getResponseHeaders and res.getResponseHeaders() or {}
   if res.close then res.close() end
-  body = util.trim(body or "")
-  if body == "" then return nil, "the sink answered with nothing" end
-  return body
+
+  local link, lerr = share.link(dest.link, answer, hdrs)
+  if not link or link == "" then
+    return nil, lerr or "the sink answered with nothing"
+  end
+  return link
 end
 
 return share

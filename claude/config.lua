@@ -37,10 +37,10 @@ config.defaults = {
   protocol    = "ccagent",
   hostname    = "ccagent-host",
 
-  -- Where /share posts a run report. Deliberately unset: any service
-  -- that takes a POST body and answers with a url works, and choosing
-  -- one for the operator chooses who receives their coordinates.
-  shareUrl    = "",
+  -- Where /share posts a run report, described rather than named. Unset
+  -- by design: choosing a sink for the operator chooses who keeps their
+  -- coordinates, probably forever. See ui/share.lua for the fields.
+  share       = {},
 
   logFile     = "/.ccagent/log.txt",
   logLevel    = "info",
