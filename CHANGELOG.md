@@ -6,6 +6,40 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Testing**
+
+- First pass of reading CC:Tweaked's source and encoding what it actually
+  does, rather than waiting for the game to disprove a guess. Four mock
+  behaviours turned out to be right and are now recorded as verified
+  rather than assumed — `TurtleMoveCommand` checks obstruction before
+  fuel and spends fuel only on success, `TurtlePlaceCommand`'s and
+  `TurtleInspectCommand`'s failure strings, and `refuel(0)` checking a
+  fuel item without consuming it, which is a load-bearing assumption of
+  `inv.refuel`.
+
+  Three were wrong or missing:
+
+  - `getFuelLevel()` and `getFuelLimit()` return the *string*
+    `"unlimited"` on a server that does not require fuel. The library
+    guards for this in four places and nothing exercised any of them, so
+    a refactor could have dropped one silently. The mock models it now
+    and the guards are held by tests; removing the one in `nav.fuel`
+    fails the suite.
+  - `refuel` distinguishes an empty slot (`"No items to combust"`) from a
+    non-fuel item (`"Items not combustible"`), and errors on a negative
+    count. The mock collapsed the first two.
+  - Which items may be equipped is datapack-defined, so the mock's list
+    was never a fact about the game. It is now `mock.upgrades`, settable,
+    and marked as a fixture — with a test that a modpack refusing a hoe
+    gets an honest refusal out of `inv.equip` rather than something
+    invented.
+
+- `test/mock.lua` now opens with what is verified against which class and
+  what is a fixture. The failures that have cost the most here were not
+  wrong code but a mock that agreed with wrong code, and the two were
+  indistinguishable by reading it.
+
+
 **Added**
 
 - `/share` and `/update`, which together remove the slowest part of

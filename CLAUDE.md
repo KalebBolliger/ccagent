@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-531 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+545 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -172,6 +172,14 @@ Nothing should come back but `noreply@anthropic.com`.
   coordinates themselves are only meaningful within one frame —
   `world.useFrame` drops the memory when that changes, and is called at
   the same boundaries as the other invalidations.
+- **`test/mock.lua` says which of its behaviours are verified and which
+  are fixtures.** Its header lists what was read out of
+  `cc-tweaked/CC-Tweaked` and what is a stand-in for something the game
+  decides at runtime (which items are valid upgrades, what burns, which
+  tool converts which block — all datapack- or modpack-defined, so no
+  list here can be right for everyone). Add a behaviour, add its line. An
+  unmarked behaviour is a guess, and that is the first place to look when
+  the game disagrees.
 - **CC:Tweaked is open source, so read it instead of guessing.** Two
   failures in a row came from plausible reasoning about behaviour that is
   written down: long generations died because `http.request` takes a

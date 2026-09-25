@@ -6,6 +6,38 @@
   Run the suite with:  lua5.3 test/run.lua   (from /ccagent)
 --------------------------------------------------------------------------]]
 
+--[[ What in here is a FACT and what is a FIXTURE ------------------------
+
+  This file is a model of CC:Tweaked, and the whole suite is only as good
+  as the model. So each behaviour says where it came from. "Verified"
+  means someone read the named class in cc-tweaked/CC-Tweaked and encoded
+  what it actually does; anything unmarked is a guess that has not been
+  checked, and is the first place to look when the game disagrees.
+
+  Verified against source:
+    * move       -- TurtleMoveCommand: obstruction is checked BEFORE fuel,
+                    fuel is spent only on success, messages "Movement
+                    obstructed" / "Out of fuel"
+    * place      -- TurtlePlaceCommand: "No items to place" for an empty
+                    slot, "Cannot place block here" otherwise
+    * inspect    -- TurtleInspectCommand: "No block to inspect"
+    * refuel     -- TurtleAPI.refuel + TurtleRefuelCommand: a count of 0
+                    checks without consuming, an empty slot is "No items
+                    to combust" and a non-fuel item "Items not
+                    combustible", a negative count is an error
+    * dig w/tool -- TurtleTool.dig: the tool is offered the block BEFORE
+                    the block-present check, and digging down reaches one
+                    further when the space below is air
+    * fuel       -- getFuelLevel/getFuelLimit return the STRING
+                    "unlimited" when the server does not require fuel
+
+  Fixtures, not facts -- true of a vanilla install, not of the game:
+    * mock.upgrades  -- which items may be equipped is datapack-defined,
+                        so no list can be correct for every modpack
+    * mock.toolUse   -- which block a tool converts into which
+    * mock.fuelNames -- what burns
+--------------------------------------------------------------------------]]
+
 local mock = {}
 
 local W = {}   -- "x,y,z" -> block name
@@ -56,9 +88,10 @@ local turtle = {}
 local function move(dx, dy, dz)
   local nx, ny, nz = T.x + dx, T.y + dy, T.z + dz
   if W[key(nx, ny, nz)] then return false, "Movement obstructed" end
-  if T.fuel <= 0 then return false, "Out of fuel" end
+  -- TurtleMoveCommand: `turtle.isFuelNeeded() && getFuelLevel() < 1`.
+  if not T.unlimitedFuel and T.fuel <= 0 then return false, "Out of fuel" end
   T.x, T.y, T.z = nx, ny, nz
-  T.fuel = T.fuel - 1
+  if not T.unlimitedFuel then T.fuel = T.fuel - 1 end
   return true
 end
 
@@ -87,6 +120,9 @@ function turtle.inspectDown() return inspect("down") end
 -- What a hoe does to what. CC:Tweaked's TurtleTool.dig asks the tool
 -- whether it has a use for the block and performs that INSTEAD of
 -- breaking it, which is why tilling goes through dig and not place.
+mock.upgrades = { "pickaxe", "axe", "shovel", "hoe", "sword",
+                  "modem", "crafting_table" }
+
 mock.toolUse = {
   ["minecraft:diamond_hoe"] = {
     ["minecraft:dirt"]       = "minecraft:farmland",
@@ -280,13 +316,12 @@ local function equip(side)
     return true
   end
 
-  -- CC:Tweaked registers every vanilla tool as a turtle upgrade, not just
-  -- the pickaxe. The old list here said otherwise, which made a hoe
-  -- impossible to equip in tests while working fine in the game.
-  local UPGRADES = { "pickaxe", "axe", "shovel", "hoe", "sword",
-                     "modem", "crafting_table" }
+  -- FIXTURE, not a fact. Turtle upgrades are registered from a datapack,
+  -- so which items are valid is a property of the modpack and no list
+  -- here can be right for everyone. Set mock.upgrades to model one that
+  -- disagrees -- the library must report the refusal, never assume.
   local valid = false
-  for _, u in ipairs(UPGRADES) do
+  for _, u in ipairs(mock.upgrades) do
     if held.name:find(u, 1, true) then valid = true; break end
   end
   if not valid then return false, "Not a valid upgrade" end
@@ -339,8 +374,17 @@ function turtle.transferTo(dst, count)
   if src.count <= 0 then T.slots[T.sel] = nil end
   return n > 0
 end
-function turtle.getFuelLevel() return T.fuel end
-function turtle.getFuelLimit() return 100000 end
+-- A server with turtlesNeedFuel off answers with the STRING "unlimited",
+-- which CC:Tweaked's own refuel example checks for. Every comparison the
+-- library makes against a fuel level has to survive it.
+function turtle.getFuelLevel()
+  if T.unlimitedFuel then return "unlimited" end
+  return T.fuel
+end
+function turtle.getFuelLimit()
+  if T.unlimitedFuel then return "unlimited" end
+  return 100000
+end
 -- mock.fuelNames decides what burns. It deliberately does not care what
 -- the item is called in any particular mod: refuel(0) is how the game is
 -- asked, and asking is the whole point.
@@ -354,10 +398,14 @@ local function burnable(name)
 end
 
 function turtle.refuel(n)
+  -- TurtleAPI.refuel: a negative count is a Lua error, not a false.
+  if n and n < 0 then error("Refuel count " .. tostring(n) .. " out of range", 0) end
   local s = T.slots[T.sel]
-  if not s or not burnable(s.name) then
-    return false, "Items not combustible"
-  end
+  -- TurtleRefuelCommand distinguishes these two, and a caller deciding
+  -- "am I carrying fuel?" from the message needs them apart.
+  if not s then return false, "No items to combust" end
+  if not burnable(s.name) then return false, "Items not combustible" end
+  if T.unlimitedFuel then return true end
   if n == 0 then return true end          -- "is this fuel?", consuming none
   local burn = math.min(n or s.count, s.count)
   s.count = s.count - burn
@@ -619,6 +667,9 @@ function mock.reset()
       mock.equippedLeft, mock.equippedRight
   mock.dropped = 0
   mock.crafted = 0
+  T.unlimitedFuel = nil
+  mock.upgrades = { "pickaxe", "axe", "shovel", "hoe", "sword",
+                    "modem", "crafting_table" }
   mock.resetHttp()
 end
 

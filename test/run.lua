@@ -1268,6 +1268,80 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("unlimited fuel: the string the library already guards against")
+fresh()
+do
+  -- A server with turtlesNeedFuel off answers getFuelLevel() with the
+  -- STRING "unlimited". The library guards for it in four places and
+  -- nothing ever exercised those guards, so a refactor could have
+  -- dropped one and no test would have noticed. Source: TurtleAPI's own
+  -- refuel example checks for exactly this value.
+  mock.turtle.unlimitedFuel = true
+  mock.turtle.fuel = 0
+  caps.refresh()
+
+  ok(turtle.getFuelLevel() == "unlimited", "the game answers with a string")
+  ok(nav.fuel() == math.huge, "nav.fuel turns it into a number", nav.fuel())
+  ok(inv.refuel(50) == math.huge,
+     "and inv.refuel reports it rather than chasing a target it cannot "
+     .. "measure", tostring(inv.refuel(50)))
+  ok(caps.get("unlimitedFuel") == true, "the capability is detected")
+
+  -- Zero fuel and no need of it: movement must work, and must not warn.
+  local warned = false
+  local realWarn = util.log.warn
+  util.log.warn = function(...) warned = true; return realWarn(...) end
+  ok(nav.forward(), "a turtle with 0 fuel still moves when fuel is free")
+  ok(not warned, "and nothing warns about a fuel level that cannot matter")
+  util.log.warn = realWarn
+
+  -- ensureFuel must not chase a target it can never measure.
+  local okFuel = nav.ensureFuel(1000)
+  ok(okFuel ~= false, "ensureFuel is satisfied by unlimited", tostring(okFuel))
+
+  -- And the description handed to Claude must not say "0 fuel".
+  local sit = agent.situation()
+  ok(sit and not sit:find("fuel 0", 1, true),
+     "the situation does not report an irrelevant zero", sit)
+end
+
+fresh()
+--------------------------------------------------------------------------
+group("refuel and equip: failures a caller has to tell apart")
+fresh()
+do
+  -- TurtleRefuelCommand returns different messages for "nothing there"
+  -- and "that is not fuel". A caller deciding whether the turtle is
+  -- carrying fuel needs them apart.
+  turtle.select(1)
+  local okR, why = turtle.refuel(0)
+  ok(not okR and why == "No items to combust", "an empty slot says so", why)
+
+  mock.turtle.slots[1] = { name = "minecraft:cobblestone", count = 1 }
+  inv.invalidate()
+  okR, why = turtle.refuel(0)
+  ok(not okR and why == "Items not combustible",
+     "a non-fuel item is a different failure", why)
+
+  ok(not pcall(turtle.refuel, -1), "a negative count is an error, not false")
+
+  -- Which items may be equipped comes from a datapack, so the library
+  -- must never assume -- it has to ask and report what came back. Model a
+  -- modpack where a hoe is not an upgrade.
+  fresh()
+  mock.upgrades = { "pickaxe" }
+  mock.turtle.slots[1] = { name = "minecraft:diamond_hoe", count = 1 }
+  inv.invalidate()
+  local okE, errE = inv.equip("*hoe")
+  ok(not okE, "an item this pack does not accept is refused")
+  ok(tostring(errE):find("upgrade", 1, true) ~= nil,
+     "with the game's reason, not one we invented", errE)
+  ok(inv.find("*hoe") ~= nil,
+     "and the hoe is still carried -- a refused equip loses nothing")
+end
+
+fresh()
+--------------------------------------------------------------------------
 group("till: the turtle cannot till what it stands on")
 fresh()
 do
