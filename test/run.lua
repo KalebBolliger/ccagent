@@ -1268,6 +1268,45 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("liquids: detect and inspect disagree, on purpose")
+fresh()
+do
+  -- Verified: TurtleDetectCommand succeeds only when the block is NOT
+  -- empty, and WorldUtil.isEmptyBlock is `isAir() || liquid()`. So a
+  -- turtle does not detect water. TurtleInspectCommand fails on isAir()
+  -- alone, so it does see it. Both are true at once.
+  mock.set(0, 64, -1, "minecraft:water")
+
+  ok(turtle.detect() == false, "a turtle does not detect water in front")
+  local seen = block.inspect("forward")
+  ok(seen and seen.name == "minecraft:water", "but inspect reports it",
+     seen and seen.name)
+
+  -- Which means a false from detect is "air OR liquid", and recording it
+  -- as air is claiming more than the game told us. The repo's own rule:
+  -- a probe that cannot tell must not have its "cannot tell" collapsed
+  -- into an answer.
+  fresh()
+  mock.set(0, 64, -1, "minecraft:water")
+  ok(block.detect("forward") == false, "block.detect passes the false along")
+  ok(not world.isKnownAir({ x = 0, y = 64, z = -1 }),
+     "and does not record air for a cell it cannot see into")
+
+  -- And it cannot record air for genuinely empty space either, because
+  -- from detect's answer alone the two cases are identical. Memory is
+  -- taught by inspect, which can tell them apart; detect is for deciding
+  -- what to do next, not for what to believe afterwards.
+  fresh()
+  ok(block.detect("forward") == false, "empty space also reads as empty")
+  ok(not world.isKnownAir({ x = 0, y = 64, z = -1 }),
+     "and is equally not recorded -- the two are indistinguishable here")
+  ok(block.inspect("forward") == nil, "inspect is what can tell")
+  ok(world.isKnownAir({ x = 0, y = 64, z = -1 }),
+     "and it is what teaches memory")
+end
+
+fresh()
+--------------------------------------------------------------------------
 group("mock coverage: how much of this is checked, as a number")
 fresh()
 do
@@ -1307,7 +1346,7 @@ do
      verified + fixture + unverified)
   -- A floor, not a target. It only goes up; dropping below it means a
   -- pass removed a citation rather than adding one.
-  ok(verified >= 28, "at least 28 behaviours are source-verified", verified)
+  ok(verified >= 43, "at least 43 behaviours are source-verified", verified)
 end
 
 fresh()

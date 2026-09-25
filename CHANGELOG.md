@@ -6,6 +6,46 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Fixed**
+
+- `block.detect` recorded air in world memory whenever it returned false.
+  It cannot know that. `TurtleDetectCommand` reports a block only when it
+  is not "empty", and `WorldUtil.isEmptyBlock` is `isAir() || liquid()` —
+  so water and lava read exactly like open space. A turtle that looked at
+  an ocean wrote "air" into memory for cells full of water, and everything
+  downstream, including the description handed to Claude, then reasoned
+  from it.
+
+  `inspect` disagrees on purpose: it fails on `isAir()` alone, so it does
+  see liquids. That asymmetry is the whole point — detect is the cheap
+  probe that cannot tell, so it now records nothing at all, and memory is
+  taught by `inspect` and `scan`, which can. `nav` already learned from
+  `inspect` rather than from detect's false, so nothing lost information.
+
+  Found by reading the source, not in-game. It is the first bug in this
+  project caught that way.
+
+**Testing**
+
+- Third fidelity pass: the remaining 15 unverified turtle functions.
+  `mock.provenance` now reads 43 verified, 2 fixtures, 0 unverified — the
+  two being `equipLeft`/`equipRight`, where a datapack decides what may be
+  equipped and no fixed rule can be right for every pack.
+
+  - `turnLeft`/`turnRight` cannot fail, cost no fuel and have no
+    precondition (`TurtleTurnCommand` yields success unconditionally).
+    The mock was already right.
+  - `detect` treats liquids as empty; `inspect` does not. See above.
+  - `attack` returns `"Nothing to attack here"`. Already right.
+  - `select` validates its slot rather than clamping it, and errors
+    outside 1..16.
+  - The item accessors match `TurtleAPI`.
+
+- `claude/prompt.lua` and the `detect` manifest entry now warn that a
+  false covers liquid as well as air, since a program treating detect as
+  "is the way clear" will walk into water believing it is air.
+
+
 **Testing**
 
 - Second fidelity pass, scoped by counting the surface first rather than

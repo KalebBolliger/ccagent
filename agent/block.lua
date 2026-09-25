@@ -107,12 +107,25 @@ function block.inspect(dir)
   return info
 end
 
+--- Is there something there? Cheap -- one call, no turning cost beyond
+--- facing.
+---
+--- A false does NOT mean air. TurtleDetectCommand reports a block only
+--- when it is not "empty", and CC counts a liquid as empty
+--- (`WorldUtil.isEmptyBlock` is `isAir() || liquid()`), so water and lava
+--- read exactly like open space here. `inspect` disagrees on purpose: it
+--- fails on `isAir()` alone and does see them.
+---
+--- So this used to record air for any false, which quietly wrote "air"
+--- into world memory for a cell holding water -- an answer the game never
+--- gave. It records nothing on a false now. Use block.inspect, or
+--- block.scan, when you want memory to learn something; detect is for
+--- deciding what to do next, not for what to remember.
 function block.detect(dir)
   local api, target, restore, err = orient(dir)
   if not api then return nil, err end
   local d = api.detect()
   if restore then restore() end
-  if target and not d then world.setAir(target) end
   return d
 end
 

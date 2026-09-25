@@ -102,7 +102,25 @@ function turtle.down()    return move(0, -1, 0) end
 function turtle.turnLeft()  T.f = (T.f + 3) % 4; return true end
 function turtle.turnRight() T.f = (T.f + 1) % 4; return true end
 
-local function detect(dir) local x, y, z = posFor(dir); return W[key(x, y, z)] ~= nil end
+-- WorldUtil.isEmptyBlock(state) is `state.isAir() || state.liquid()`, and
+-- TurtleDetectCommand returns success only when the block is NOT empty.
+-- So a turtle does not detect water or lava -- while inspect does see
+-- them, because TurtleInspectCommand fails on isAir() alone. The two
+-- disagree about liquid on purpose, and anything folding detect into a
+-- belief about the world has to know that.
+--
+-- FIXTURE: which blocks are liquids. Modded fluids exist.
+mock.liquids = {
+  ["minecraft:water"] = true, ["minecraft:lava"] = true,
+  ["minecraft:flowing_water"] = true, ["minecraft:flowing_lava"] = true,
+}
+
+local function detect(dir)
+  local x, y, z = posFor(dir)
+  local n = W[key(x, y, z)]
+  if not n then return false end
+  return not mock.liquids[n]
+end
 function turtle.detect()     return detect("forward") end
 function turtle.detectUp()   return detect("up") end
 function turtle.detectDown() return detect("down") end
@@ -353,7 +371,14 @@ function turtle.attack()     return false, "Nothing to attack here" end
 function turtle.attackUp()   return false, "Nothing to attack here" end
 function turtle.attackDown() return false, "Nothing to attack here" end
 
-function turtle.select(n) T.sel = n; return true end
+function turtle.select(n)
+  -- TurtleAPI.select: the slot is checked, not clamped.
+  if type(n) ~= "number" or n < 1 or n > 16 then
+    error("Slot out of range", 0)
+  end
+  T.sel = n
+  return true
+end
 function turtle.getSelectedSlot() return T.sel end
 function turtle.getItemCount(n) local s = T.slots[n or T.sel]; return s and s.count or 0 end
 function turtle.getItemSpace(n) local s = T.slots[n or T.sel]; return s and (64 - s.count) or 64 end
@@ -748,15 +773,15 @@ mock.provenance = {
   -- Nobody has read these. Trivial-looking is not the same as checked;
   -- turnLeft looked trivial too until you ask what it does at a world
   -- border.
-  turnLeft = "unverified", turnRight = "unverified",
-  detect = "unverified", detectUp = "unverified",
-  detectDown = "unverified",
-  attack = "unverified", attackUp = "unverified",
-  attackDown = "unverified",
-  select = "unverified", getSelectedSlot = "unverified",
-  getItemCount = "unverified", getItemSpace = "unverified",
-  getItemDetail = "unverified",
-  getEquippedLeft = "unverified", getEquippedRight = "unverified",
+  turnLeft = "TurtleTurnCommand", turnRight = "TurtleTurnCommand",
+  detect = "TurtleDetectCommand + WorldUtil.isEmptyBlock", detectUp = "TurtleDetectCommand + WorldUtil.isEmptyBlock",
+  detectDown = "TurtleDetectCommand + WorldUtil.isEmptyBlock",
+  attack = "TurtleTool.attack", attackUp = "TurtleTool.attack",
+  attackDown = "TurtleTool.attack",
+  select = "TurtleAPI.select", getSelectedSlot = "TurtleAPI",
+  getItemCount = "TurtleAPI", getItemSpace = "TurtleAPI",
+  getItemDetail = "TurtleAPI",
+  getEquippedLeft = "TurtleAPI", getEquippedRight = "TurtleAPI",
 }
 
 --- The turtle API this project relies on, read off TurtleAPI.java. Not a

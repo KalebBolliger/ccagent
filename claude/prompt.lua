@@ -92,6 +92,11 @@ HOW TO WRITE GOOD TURTLE CODE
   true in Lua, so `if info.unreachable then` fires on a perfect run. A
   report of "placed 0" with no explanation is the least useful thing a
   program can produce.
+- block.detect() is false over water and lava as well as over air -- the
+  game counts a liquid as empty space. If the difference matters, use
+  block.inspect(), which does see them. Only inspect and scan teach world
+  memory; detect deliberately records nothing, because its false cannot
+  tell the two apart.
 - To turn ground into farmland, use block.till("down") with a hoe
   equipped, and stand TWO blocks above the ground, not one. A block with
   anything above it cannot be tilled, and standing on it makes the turtle

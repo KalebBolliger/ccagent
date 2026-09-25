@@ -169,7 +169,7 @@ registry.add("nav", nav, "position, movement, pathfinding", {
 
 registry.add("block", block, "look at, break, place and hit blocks in any direction", {
   { fn = "inspect",  sig = "(dir) -> info|nil, err",        doc = "info.name, info.state; turns as needed" },
-  { fn = "detect",   sig = "(dir) -> boolean" },
+  { fn = "detect",   sig = "(dir) -> boolean",            doc = "cheap, but false means air OR liquid -- a turtle does not detect water. Use inspect when the difference matters" },
   { fn = "is",       sig = "(dir, pattern) -> bool, info",  doc = "glob match, e.g. block.is('down','*_ore')" },
   { fn = "scan",     sig = "(opts?) -> {dir=name|false}",   doc = "look all six ways, fold into world memory" },
   { fn = "dig",      sig = "(dir, opts?) -> ok, err",       doc = "opts: only=pattern, repeatWhileFalling, force" },

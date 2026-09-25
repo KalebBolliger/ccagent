@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-561 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+569 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -180,9 +180,11 @@ Nothing should come back but `noreply@anthropic.com`.
   looked). `mock.apiSurface` lists what our code can reach, so a function
   the library calls and the mock lacks fails a test instead of waiting to
   become a nil-index in a path nothing covers. Adding a faked function
-  without a provenance entry fails too. Currently 28 verified, 2
-  fixtures, 15 unverified — and the last number is the honest measure of
-  how much of this suite is resting on nothing.
+  without a provenance entry fails too. Currently 43 verified, 2
+  fixtures, 0 unverified — the two fixtures being `equipLeft`/`equipRight`,
+  where a datapack decides and no fixed rule can be right. Zero unverified
+  is a floor to hold, not a finish line: it means every faked behaviour
+  has a citation, not that the citation is complete.
 - **CC:Tweaked is open source, so read it instead of guessing.** Two
   failures in a row came from plausible reasoning about behaviour that is
   written down: long generations died because `http.request` takes a
