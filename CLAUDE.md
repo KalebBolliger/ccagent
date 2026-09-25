@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-545 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+561 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -173,13 +173,16 @@ Nothing should come back but `noreply@anthropic.com`.
   `world.useFrame` drops the memory when that changes, and is called at
   the same boundaries as the other invalidations.
 - **`test/mock.lua` says which of its behaviours are verified and which
-  are fixtures.** Its header lists what was read out of
-  `cc-tweaked/CC-Tweaked` and what is a stand-in for something the game
-  decides at runtime (which items are valid upgrades, what burns, which
-  tool converts which block — all datapack- or modpack-defined, so no
-  list here can be right for everyone). Add a behaviour, add its line. An
-  unmarked behaviour is a guess, and that is the first place to look when
-  the game disagrees.
+  are fixtures, and the suite counts them.** `mock.provenance` maps every
+  faked turtle function to the CC:Tweaked class it was read from, or to
+  `fixture` (the real answer is decided at runtime by a datapack or the
+  world, so no fixed rule can be right) or `unverified` (nobody has
+  looked). `mock.apiSurface` lists what our code can reach, so a function
+  the library calls and the mock lacks fails a test instead of waiting to
+  become a nil-index in a path nothing covers. Adding a faked function
+  without a provenance entry fails too. Currently 28 verified, 2
+  fixtures, 15 unverified — and the last number is the honest measure of
+  how much of this suite is resting on nothing.
 - **CC:Tweaked is open source, so read it instead of guessing.** Two
   failures in a row came from plausible reasoning about behaviour that is
   written down: long generations died because `http.request` takes a

@@ -8,6 +8,46 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Testing**
 
+- Second fidelity pass, scoped by counting the surface first rather than
+  stopping where the interesting findings ran out — which is what
+  happened the first time, undeclared.
+
+  `mock.provenance` now maps every faked turtle function to the
+  CC:Tweaked class it was read from, or to `fixture` or `unverified`, and
+  `mock.apiSurface` lists what our code can reach. Two tests hold it: the
+  mock must implement everything callable, and nothing may be faked
+  without saying where it came from. 28 verified, 2 fixtures, 15
+  unverified; the last figure is the point, since it was previously
+  unknowable.
+
+  Verified and corrected this pass:
+
+  - `turtle.compare`, `compareUp`, `compareDown` and `compareTo` did not
+    exist in the mock at all, while `agent/block.lua`'s direction table
+    declares three of them. Nothing calls those entries — there is no
+    `block.compare` — so this was latent rather than live, but it could
+    only ever have surfaced as a nil-index, and no test could have caught
+    it first. Implemented per `TurtleCompareCommand`: the item form of
+    the selected slot against the block, two empties never matching, no
+    failure message.
+  - `drop`, `suck` and `transferTo` returned a bare `false`. The real
+    commands name their failures (`"No items to drop"`, `"No items to
+    take"`, `"No space for items"`), and a partial transfer is success in
+    all three. `suck` had no success path whatever — it always refused —
+    so every caller of `block.suck` had only ever been exercised in its
+    failure branch.
+  - `craft` bounds its count 0..64 and errors outside it
+    (`CraftingTablePeripheral`).
+
+- A dead entry worth someone's decision: `agent/block.lua`'s direction
+  table declares `compare` for all three directions and no public
+  function uses it. It is either a missing capability or three lines to
+  delete; left alone here because a fidelity pass should not quietly
+  change the library's surface.
+
+
+**Testing**
+
 - First pass of reading CC:Tweaked's source and encoding what it actually
   does, rather than waiting for the game to disprove a guess. Four mock
   behaviours turned out to be right and are now recorded as verified

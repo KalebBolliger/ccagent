@@ -209,6 +209,10 @@ function turtle.placeDown() return place("down") end
 -- trusting it: the left 3x3 (1,2,3 / 5,6,7 / 9,10,11), positional, one
 -- item per cell. Only the recipes the tests need.
 function mock.craftImpl(limit)
+  -- CraftingTablePeripheral: count defaults to 64 and must be 0..64.
+  if limit ~= nil and (limit < 0 or limit > 64) then
+    error("Crafting count out of range", 0)
+  end
   -- The failure seen in game: the method is callable with no crafting
   -- table attached, and returns a bare false -- no message at all, which
   -- is what distinguishes it from a genuine recipe mismatch.
@@ -361,18 +365,22 @@ function turtle.getItemDetail(n, detailed)
   return d
 end
 function turtle.transferTo(dst, count)
+  -- TurtleTransferToCommand: whatever will not fit goes back to the
+  -- source slot, and moving any of it at all is success. Moving none is
+  -- "No space for items".
   local src = T.slots[T.sel]
-  if not src then return false end
+  if not src then return false, "No space for items" end
   count = math.min(count or src.count, src.count)
   local d = T.slots[dst]
-  if d and d.name ~= src.name then return false end
+  if d and d.name ~= src.name then return false, "No space for items" end
   if not d then T.slots[dst] = { name = src.name, count = 0 }; d = T.slots[dst] end
   local room = 64 - d.count
   local n = math.min(count, room)
   d.count = d.count + n
   src.count = src.count - n
   if src.count <= 0 then T.slots[T.sel] = nil end
-  return n > 0
+  if n == 0 then return false, "No space for items" end
+  return true
 end
 -- A server with turtlesNeedFuel off answers with the STRING "unlimited",
 -- which CC:Tweaked's own refuel example checks for. Every comparison the
@@ -416,7 +424,9 @@ end
 local function dropDir(dir)
   return function(n)
     local s = T.slots[T.sel]
-    if not s then return false end
+    -- TurtleDropCommand: "No items to drop" / "No space for items". With
+    -- no container there, the items land in the world, which is success.
+    if not s then return false, "No items to drop" end
     local x, y, z = posFor(dir)
     n = math.min(n or s.count, s.count)
     s.count = s.count - n
@@ -427,8 +437,72 @@ local function dropDir(dir)
 end
 turtle.drop, turtle.dropUp, turtle.dropDown =
   dropDir("forward"), dropDir("up"), dropDir("down")
-turtle.suck = function() return false end
-turtle.suckUp, turtle.suckDown = turtle.suck, turtle.suck
+-- TurtleCompareCommand: the ITEM form of the selected slot against the
+-- item form of the block that way. Two empties do not match, and there
+-- is no failure message -- just false.
+--
+-- These were missing entirely while agent/block.lua's API table called
+-- them, so block.compare could only ever have raised "attempt to call a
+-- nil value". Nothing noticed, because nothing exercised it.
+local function compareDir(dir)
+  return function()
+    local s = T.slots[T.sel]
+    local x, y, z = posFor(dir)
+    local n = W[key(x, y, z)]
+    if not s or not n then return false end
+    return s.name == n
+  end
+end
+turtle.compare, turtle.compareUp, turtle.compareDown =
+  compareDir("forward"), compareDir("up"), compareDir("down")
+
+function turtle.compareTo(slot)
+  local a, b = T.slots[T.sel], T.slots[slot]
+  if not a or not b then return false end
+  return a.name == b.name
+end
+
+-- TurtleSuckCommand: "No items to take" when there is nothing there,
+-- "No space for items" when it will not fit. Partial pickup is success.
+-- mock.ground is a fixture -- a bare pile per position, not Minecraft's
+-- entity model, but enough for the library's success path to exist.
+mock.ground = {}
+
+function mock.drop(x, y, z, name, count)
+  local k = key(x, y, z)
+  mock.ground[k] = mock.ground[k] or {}
+  mock.ground[k][name] = (mock.ground[k][name] or 0) + (count or 1)
+end
+
+local function suckDir(dir)
+  return function(n)
+    local x, y, z = posFor(dir)
+    local pile = mock.ground[key(x, y, z)]
+    if not pile or not next(pile) then return false, "No items to take" end
+    local name, have = next(pile)
+    local want = math.min(n or 64, have)
+    local moved = 0
+    for i = 1, 16 do
+      if moved >= want then break end
+      local sl = T.slots[i]
+      if not sl then
+        T.slots[i] = { name = name, count = 0 }; sl = T.slots[i]
+      end
+      if sl.name == name and sl.count < 64 then
+        local take = math.min(want - moved, 64 - sl.count)
+        sl.count = sl.count + take
+        moved = moved + take
+      end
+      if T.slots[i] and T.slots[i].count == 0 then T.slots[i] = nil end
+    end
+    if moved == 0 then return false, "No space for items" end
+    pile[name] = have - moved
+    if pile[name] <= 0 then pile[name] = nil end
+    return true
+  end
+end
+turtle.suck, turtle.suckUp, turtle.suckDown =
+  suckDir("forward"), suckDir("up"), suckDir("down")
 
 ------------------------------------------------------------ environment ---
 
@@ -631,6 +705,78 @@ function mock.sse(parts)
   return table.concat(out, "\n")
 end
 
+------------------------------------------------------------ provenance ---
+-- Which faked behaviours have been read out of CC:Tweaked and which have
+-- not. A name mapped to a class means someone checked that class and
+-- encoded what it does; "fixture" means the real answer is decided at
+-- runtime by a datapack or the world and no fixed rule can be right;
+-- "unverified" means nobody has looked, and that is where to start when
+-- the game disagrees.
+--
+-- test/run.lua fails if a function on the turtle table is missing from
+-- here, so the unverified surface stays counted instead of forgotten.
+mock.provenance = {
+  forward = "TurtleMoveCommand", back = "TurtleMoveCommand",
+  up = "TurtleMoveCommand", down = "TurtleMoveCommand",
+
+  dig = "TurtleTool.dig", digUp = "TurtleTool.dig",
+  digDown = "TurtleTool.dig",
+
+  place = "TurtlePlaceCommand", placeUp = "TurtlePlaceCommand",
+  placeDown = "TurtlePlaceCommand",
+
+  inspect = "TurtleInspectCommand", inspectUp = "TurtleInspectCommand",
+  inspectDown = "TurtleInspectCommand",
+
+  compare = "TurtleCompareCommand", compareUp = "TurtleCompareCommand",
+  compareDown = "TurtleCompareCommand", compareTo = "TurtleCompareCommand",
+
+  drop = "TurtleDropCommand", dropUp = "TurtleDropCommand",
+  dropDown = "TurtleDropCommand",
+
+  suck = "TurtleSuckCommand", suckUp = "TurtleSuckCommand",
+  suckDown = "TurtleSuckCommand",
+
+  transferTo = "TurtleTransferToCommand",
+  refuel = "TurtleAPI.refuel + TurtleRefuelCommand",
+  getFuelLevel = "TurtleAPI", getFuelLimit = "TurtleAPI",
+  craft = "CraftingTablePeripheral",
+
+  -- Decided at runtime, so no rule here can be a fact.
+  equipLeft = "fixture", equipRight = "fixture",
+
+  -- Nobody has read these. Trivial-looking is not the same as checked;
+  -- turnLeft looked trivial too until you ask what it does at a world
+  -- border.
+  turnLeft = "unverified", turnRight = "unverified",
+  detect = "unverified", detectUp = "unverified",
+  detectDown = "unverified",
+  attack = "unverified", attackUp = "unverified",
+  attackDown = "unverified",
+  select = "unverified", getSelectedSlot = "unverified",
+  getItemCount = "unverified", getItemSpace = "unverified",
+  getItemDetail = "unverified",
+  getEquippedLeft = "unverified", getEquippedRight = "unverified",
+}
+
+--- The turtle API this project relies on, read off TurtleAPI.java. Not a
+--- claim to be the whole API -- a claim to be what our code can reach, so
+--- a function the library calls and the mock lacks is a test failure
+--- rather than a nil-index in some path nothing happens to cover.
+mock.apiSurface = {
+  "forward", "back", "up", "down", "turnLeft", "turnRight",
+  "dig", "digUp", "digDown", "place", "placeUp", "placeDown",
+  "detect", "detectUp", "detectDown",
+  "compare", "compareUp", "compareDown", "compareTo",
+  "inspect", "inspectUp", "inspectDown",
+  "select", "getSelectedSlot", "getItemCount", "getItemSpace",
+  "getItemDetail", "drop", "dropUp", "dropDown",
+  "suck", "suckUp", "suckDown", "transferTo",
+  "attack", "attackUp", "attackDown",
+  "getFuelLevel", "getFuelLimit", "refuel",
+  "equipLeft", "equipRight", "getEquippedLeft", "getEquippedRight",
+}
+
 function mock.install()
   _G.turtle = turtle
   _G.fs = fs
@@ -668,6 +814,7 @@ function mock.reset()
   mock.dropped = 0
   mock.crafted = 0
   T.unlimitedFuel = nil
+  for k in pairs(mock.ground or {}) do mock.ground[k] = nil end
   mock.upgrades = { "pickaxe", "axe", "shovel", "hoe", "sword",
                     "modem", "crafting_table" }
   mock.resetHttp()

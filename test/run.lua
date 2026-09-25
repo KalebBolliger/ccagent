@@ -1268,6 +1268,115 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("mock coverage: how much of this is checked, as a number")
+fresh()
+do
+  -- The first fidelity pass stopped where it ran out of momentum rather
+  -- than where the surface ended, and nobody could tell because nothing
+  -- counted it. These assertions make "how much is verified" a fact.
+
+  -- Every function the library can reach must exist. turtle.craft is the
+  -- one deliberate exception: it is absent until a crafting table is on
+  -- a side, which is itself a verified behaviour.
+  local missing = {}
+  for _, name in ipairs(mock.apiSurface) do
+    if type(turtle[name]) ~= "function" then missing[#missing + 1] = name end
+  end
+  ok(#missing == 0, "the mock implements the API surface we call",
+     table.concat(missing, ","))
+
+  -- And nothing may be faked without saying where it came from.
+  local unmarked = {}
+  for name, v in pairs(turtle) do
+    if type(v) == "function" and not mock.provenance[name] then
+      unmarked[#unmarked + 1] = name
+    end
+  end
+  ok(#unmarked == 0, "every faked function declares its provenance",
+     table.concat(unmarked, ","))
+
+  local verified, fixture, unverified = 0, 0, 0
+  for _, src in pairs(mock.provenance) do
+    if src == "unverified" then unverified = unverified + 1
+    elseif src == "fixture" then fixture = fixture + 1
+    else verified = verified + 1 end
+  end
+  ok(verified + fixture + unverified == 45,
+     ("provenance covers the surface (%d verified, %d fixture, %d unverified)")
+       :format(verified, fixture, unverified),
+     verified + fixture + unverified)
+  -- A floor, not a target. It only goes up; dropping below it means a
+  -- pass removed a citation rather than adding one.
+  ok(verified >= 28, "at least 28 behaviours are source-verified", verified)
+end
+
+fresh()
+--------------------------------------------------------------------------
+group("drop, suck, compare, transferTo: paths that had no coverage")
+fresh()
+do
+  -- agent/block.lua's direction table declares compare for all three
+  -- directions and nothing calls it -- there is no block.compare. So the
+  -- missing mock function was latent rather than live: the day anything
+  -- used that entry it would have raised "attempt to call a nil value",
+  -- and no test could have caught it first.
+  mock.set(0, 64, -1, "minecraft:stone")
+  mock.turtle.slots[1] = { name = "minecraft:stone", count = 4 }
+  inv.invalidate()
+  turtle.select(1)
+  ok(turtle.compare() == true, "a matching block compares equal")
+  mock.turtle.slots[1] = { name = "minecraft:dirt", count = 4 }
+  inv.invalidate()
+  ok(turtle.compare() == false, "a different one does not")
+  mock.set(0, 64, -1, nil)
+  ok(turtle.compare() == false, "and air never matches anything")
+  mock.turtle.slots[1] = nil
+  inv.invalidate()
+  ok(turtle.compareTo(2) == false, "two empty slots do not match either")
+
+  -- TurtleDropCommand names its failures; a bare false says nothing a
+  -- caller can act on.
+  fresh()
+  turtle.select(1)
+  local okD, whyD = turtle.drop()
+  ok(not okD and whyD == "No items to drop", "an empty slot says why", whyD)
+
+  -- Suck had no success path at all -- the mock always refused, so every
+  -- caller of block.suck was exercised only in its failure branch.
+  fresh()
+  local okS, whyS = turtle.suck()
+  ok(not okS and whyS == "No items to take", "nothing there says so", whyS)
+
+  local p = mock.turtle
+  mock.drop(p.x, p.y, p.z - 1, "minecraft:cobblestone", 5)
+  ok(turtle.suck(), "and a pile in front can be picked up")
+  inv.invalidate()
+  ok(inv.count("minecraft:cobblestone") == 5, "arriving in the inventory",
+     inv.count("minecraft:cobblestone"))
+
+  -- Partial transfers are success, and moving nothing is not.
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:dirt", count = 10 }
+  mock.turtle.slots[2] = { name = "minecraft:stone", count = 1 }
+  inv.invalidate()
+  turtle.select(1)
+  local okT, whyT = turtle.transferTo(2)
+  ok(not okT and whyT == "No space for items",
+     "a slot holding something else refuses, and says so", whyT)
+  ok(turtle.transferTo(3), "an empty slot accepts")
+
+  -- CraftingTablePeripheral bounds the count.
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:crafting_table", count = 1 }
+  inv.invalidate()
+  turtle.select(1)
+  executor.sandbox(agent.env()).turtle.equipLeft()
+  ok(turtle.craft ~= nil, "craft appears with the table equipped")
+  ok(not pcall(turtle.craft, 65), "and a count over 64 is an error")
+end
+
+fresh()
+--------------------------------------------------------------------------
 group("unlimited fuel: the string the library already guards against")
 fresh()
 do
