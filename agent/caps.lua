@@ -255,10 +255,21 @@ function caps.summary()
   local function add(cond, text) if cond then bits[#bits + 1] = text end end
   add(f.turtle, "turtle")
   add(not f.turtle, "computer (no turtle API)")
+  -- "NO-dig" states the present, and reads as a verdict. When the thing
+  -- that would supply the capability is sitting in the inventory, say so
+  -- here rather than only in caps.require's error -- by the time that
+  -- fires, a program has already been written around the turtle being
+  -- incapable. Two words, and only when there is something to say.
+  local function lacking(name, label)
+    if caps.carriedFix(name) then return label .. "(aboard)" end
+    return "NO-" .. label
+  end
   add(f.digging == true, "dig")
   add(f.digging == nil, "dig?")
-  add(f.digging == false, "NO-dig")
+  add(f.digging == false, lacking("digging", "dig"))
   add(f.crafting, "craft")
+  add(f.crafting == false and caps.carriedFix("crafting") ~= nil,
+      "craft(aboard)")
   add(f.equip, "equip")
   add(f.gps, "gps")
   add(f.wirelessModem, "wireless")

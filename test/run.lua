@@ -1415,6 +1415,45 @@ end
 
 fresh()
 --------------------------------------------------------------------------
+group("state reads as capability: 'cannot' vs 'has not yet'")
+fresh()
+do
+  -- A turtle with a pickaxe in its bag and nothing equipped is not a
+  -- turtle that cannot dig -- but "NO-dig" is what the model read, and it
+  -- wrote a program around the turtle being incapable. caps.carriedFix
+  -- already knew the answer; it was only reachable from caps.require,
+  -- which fires after such a program has been written and has failed.
+  mock.turtle.hasTool = false
+  mock.turtle.equipped = nil
+  caps.refresh()
+  ok(caps.get("digging") == false, "no tool means no digging")
+  ok(caps.summary():find("NO-dig", 1, true) ~= nil,
+     "and with an empty inventory it says so flatly", caps.summary())
+
+  mock.turtle.slots[1] = { name = "minecraft:diamond_pickaxe", count = 1 }
+  inv.invalidate()
+  caps.refresh()
+  ok(caps.summary():find("dig(aboard)", 1, true) ~= nil,
+     "carrying the tool changes what the line says", caps.summary())
+  ok(caps.summary():find("NO-dig", 1, true) == nil,
+     "and it no longer reads as a verdict", caps.summary())
+
+  -- Still false, though: the line is a hint about the remedy, not a claim
+  -- that the capability is present. A guard that let this through would
+  -- be worse than the wording it replaced.
+  ok(caps.get("digging") == false, "the capability itself is unchanged")
+  ok(not pcall(caps.require, "digging"), "and require still refuses")
+
+  -- The error path keeps naming the slot and the call.
+  local _, err = pcall(caps.require, "digging")
+  ok(tostring(err):find("slot 1", 1, true) ~= nil,
+     "with the slot", err)
+  ok(tostring(err):find("inv.equip", 1, true) ~= nil,
+     "and what to call", err)
+end
+
+fresh()
+--------------------------------------------------------------------------
 group("unlimited fuel: the string the library already guards against")
 fresh()
 do

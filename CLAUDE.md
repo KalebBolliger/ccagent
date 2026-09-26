@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-593 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+606 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -135,6 +135,17 @@ Nothing should come back but `noreply@anthropic.com`.
   read. Put the detail in `README.md` and keep the in-game text to what
   someone needs at that moment. `test/run_install.lua` measures the
   bootstrapper's prompts; nothing measures the rest, so check by eye.
+- **The state line reports what is, and gets read as what is possible.**
+  `fuel 0` and `NO-dig` are both accurate and both cost a run: the first
+  made a generated program ask the operator for coal while carrying 64 of
+  it, the second described a turtle with a pickaxe in slot 1 as one that
+  cannot dig. Neither was a lie; both read as verdicts. So `caps.summary`
+  says `dig(aboard)` when `caps.carriedFix` has an answer, and `nav.fuel`
+  is documented as the raw level that movement already handles. When you
+  add anything to `agent.situation`, ask what a reader will conclude from
+  it, not only whether it is true -- and put the remedy where the decision
+  is made, not only in the error raised after a program was written
+  around the absence.
 - **Zero is true in Lua.** Never make a caller derive a boolean from a
   count. `block.fill` returned `info.unreachable = 0` on a perfect run
   and `claude/prompt.lua` told the model to write

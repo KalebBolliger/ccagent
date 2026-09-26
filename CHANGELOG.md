@@ -6,6 +6,39 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Fixed**
+
+- A turtle carrying 64 coal and 64 coal blocks asked the operator to
+  supply coal, and stopped. The generated program gated on
+  `nav.fuel() < 20`, which is 0 until something is burned, and returned
+  before reaching its own `nav.ensureFuel` call. It aborted in 0.001s
+  while holding roughly 85,000 fuel units.
+
+  Nothing in the library was wrong — `nav.moveTo` already calls
+  `ensureFuel` before pathing, and every raw move refuels when the level
+  hits zero, so the program's precondition was one the library handles
+  and the job would have run had it simply moved. What was wrong is what
+  the model was told. The rule existed, in `claude/prompt.lua`, phrased
+  as "check what it is carrying before concluding it is incapable" — a
+  general principle in a list of principles, losing to a state line that
+  says `fuel 0`.
+
+  The rule is now the imperative opposite ("do NOT gate a job on
+  nav.fuel()"), and it also sits in `nav.fuel`'s manifest entry, next to
+  the signature the model reads when it reaches for the call. That doc is
+  in the cached prefix, so the better placement costs nothing per request.
+
+- `caps.summary` said `NO-dig` for a turtle with a pickaxe in slot 1.
+  Accurate, and it reads as a verdict — the model wrote a program around
+  the turtle being incapable. `caps.carriedFix` already produced
+  "diamond_pickaxe is in slot 1 but not equipped -- inv.equip(...)", but
+  only from `caps.require`, which fires after such a program has been
+  written and has failed. The summary now says `dig(aboard)` when there
+  is a carried remedy, in two words, and only when there is one. The
+  capability itself is unchanged and `caps.require` still refuses: it is
+  a hint about the remedy, not a claim the capability is present.
+
+
 **Changed — breaking**
 
 - The installer is now `install.lua`, and the local setup it hands off to

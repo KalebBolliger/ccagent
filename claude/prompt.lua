@@ -77,11 +77,12 @@ HOW TO WRITE GOOD TURTLE CODE
   not fuel. If caps.has("digging") is false, inv.equip("*pickaxe") makes
   it true when one is carried -- caps.carriedFix("digging") says so in
   words. If the turtle is short of fuel, inv.refuel(n) or nav.ensureFuel(n)
-  burns what it carries; getFuelLevel does not rise until something is
-  burned, and what burns is whatever the game accepts, mods included --
-  inv.fuelSlots() lists them. Do both rather than reporting that the
-  turtle cannot: check what it is carrying before concluding it is
-  incapable, and check that a refuel actually worked before moving on.
+  burns what it carries, and nav.moveTo already refuels before it goes.
+  So do NOT gate a job on nav.fuel(): a turtle carrying coal reads as
+  "fuel 0" and is one move away from burning it. Just move. Only call
+  nav.ensureFuel(n) yourself when you need fuel for something other than
+  moving, and only report "out of fuel" once a refuel has actually been
+  tried and failed.
 - Narrate with job.say() at meaningful milestones, not every block.
 - block.fill and block.clear return an `info` table after their counts.
   `info.complete` is the answer: false means the job did not do what was

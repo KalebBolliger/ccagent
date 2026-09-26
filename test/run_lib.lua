@@ -747,6 +747,38 @@ do
 end
 
 --------------------------------------------------------------------------
+group("the fuel trap is documented where the call is chosen")
+do
+  local registry = require("agent.registry")
+  local manifest = registry.manifest()
+
+  -- The rule lived only in the prompt's list of principles, where it lost
+  -- to a state line reading "fuel 0". It belongs next to the signature
+  -- the model reads when it reaches for the call -- and that doc string
+  -- is in the cached prefix, so it costs nothing per request.
+  local fuelLine
+  for line in manifest:gmatch("[^\n]+") do
+    if line:find("fuel", 1, true) and line:find("->", 1, true)
+       and not line:find("ensureFuel", 1, true)
+       and not line:find("fuelSlots", 1, true) then
+      fuelLine = fuelLine or line
+    end
+  end
+  ok(fuelLine ~= nil, "nav.fuel is listed", manifest:sub(1, 80))
+  ok(fuelLine and fuelLine:lower():find("do not gate", 1, true) ~= nil,
+     "and its doc says not to gate on it", fuelLine)
+  ok(fuelLine and fuelLine:find("refuel", 1, true) ~= nil,
+     "naming what happens instead", fuelLine)
+
+  local prompt = require("claude.prompt")
+  local sys = prompt.system({ cache = false })[1].text
+  ok(sys:find("do NOT gate a job on nav.fuel()", 1, true) ~= nil,
+     "and the prompt says it in the imperative")
+  ok(sys:find("check what it is carrying before concluding", 1, true) == nil,
+     "the older phrasing is gone rather than stacked on top of")
+end
+
+--------------------------------------------------------------------------
 group("config: a file kept across updates pins values the code moved past")
 do
   local config = require("claude.config")

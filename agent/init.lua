@@ -161,8 +161,8 @@ registry.add("nav", nav, "position, movement, pathfinding", {
   { fn = "setHome",    sig = "(pos?) -> ok",                 doc = "remember a return point" },
   { fn = "home",       sig = "() -> pos|nil" },
   { fn = "goHome",     sig = "(opts?) -> ok, err" },
-  { fn = "fuel",       sig = "() -> n",                      doc = "math.huge if unlimited" },
-  { fn = "ensureFuel", sig = "(n) -> ok, err",               doc = "refuel from inventory if below n" },
+  { fn = "fuel",       sig = "() -> n",                      doc = "the RAW level, 0 until something is burned. Do not gate on it: moveTo and every move already refuel from what is carried. math.huge if unlimited" },
+  { fn = "ensureFuel", sig = "(n) -> ok, err",               doc = "burn carried fuel up to n; movement calls this for you" },
   { fn = "calibrate",  sig = "(opts?) -> ok, err",           doc = "re-fix position/heading from GPS" },
   { fn = "status",     sig = "() -> string" },
 })
