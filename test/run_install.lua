@@ -1,4 +1,4 @@
---[[ test/run_boot.lua --------------------------------------------------
+--[[ test/run_install.lua --------------------------------------------------
   The bootstrapper, against a mocked CC:Tweaked world and a fake http.
 
   Two things are checked here, and they fail differently in-game:
@@ -12,7 +12,7 @@
       survival, and the all-or-nothing rule (a failed download must leave
       the existing install exactly as it was).
 
-      lua5.3 test/run_boot.lua
+      lua5.3 test/run_install.lua
 --------------------------------------------------------------------------]]
 
 package.path = "./?.lua;./?/init.lua;" .. package.path
@@ -75,7 +75,7 @@ if pipe then
   pipe:close()
   scanned = #found > 0
 end
-for _, p in ipairs({ "boot.lua", "install.lua", "config.lua" }) do
+for _, p in ipairs({ "install.lua", "setup.lua", "config.lua" }) do
   if slurp(p) then found[#found + 1] = p end
 end
 
@@ -98,8 +98,8 @@ group("the front ends can find the library")
 
 -- The tree installs at /ccagent, so every entry point has to put /ccagent
 -- on package.path before it requires anything. CC also searches the
--- running program's own directory, which is why install.lua (at
--- /ccagent/install.lua) can get this wrong and still work, while ui/*.lua
+-- running program's own directory, which is why setup.lua (at
+-- /ccagent/setup.lua) can get this wrong and still work, while ui/*.lua
 -- (one level deeper) cannot. Resolution is simulated here rather than
 -- pattern-matched: substitute the module into each path entry and see
 -- whether the file it names actually exists in this repo.
@@ -120,7 +120,7 @@ local function resolves(file, modname)
 end
 
 for _, entry in ipairs({ "ui/controller.lua", "ui/worker.lua", "ui/host.lua",
-                         "install.lua" }) do
+                         "setup.lua" }) do
   local found, detail = resolves(entry, "agent.util")
   ok(found, entry .. " finds agent.util under " .. INSTALL_DIR, detail)
 end
@@ -153,11 +153,11 @@ end
 --------------------------------------------------------------------------
 group("the generated launcher")
 
--- install.lua writes /ccagent.lua as a literal. It runs under CC's Lua, so
+-- setup.lua writes /ccagent.lua as a literal. It runs under CC's Lua, so
 -- it may not lean on table.unpack, and it has to at least compile.
-local installSrc = slurp("install.lua") or ""
+local installSrc = slurp("setup.lua") or ""
 local launcher = installSrc:match('h%.write%(%[%[(.-)%]%]%)')
-ok(launcher ~= nil, "install.lua carries a launcher body")
+ok(launcher ~= nil, "setup.lua carries a launcher body")
 ok(launcher and load(launcher) ~= nil, "the launcher compiles")
 ok(launcher and launcher:find("table.unpack or unpack", 1, true) ~= nil,
    "the launcher shims unpack rather than assuming 5.2+")
@@ -165,11 +165,11 @@ ok(launcher and launcher:find("update", 1, true) ~= nil,
    "the launcher knows `ccagent update`")
 
 --------------------------------------------------------------------------
-group("boot.lua")
+group("install.lua -- the bootstrapper")
 
-local BOOT = assert(loadfile("boot.lua"))
+local BOOT = assert(loadfile("install.lua"))
 
---- Run boot.lua against a fake http server.
+--- Run install.lua against a fake http server.
 --  served: url-prefix -> { path -> content }, content false to fail it.
 --  answers: queued replies for read(), when the run is expected to prompt.
 local function runBoot(args, served, existing, answers)
@@ -220,8 +220,8 @@ end
 --- A served tree: a three-file manifest, so the tests stay readable.
 local function tree(manifestBody, extra)
   local t = { ["manifest.txt"] = manifestBody or
-    "# comment\n\nboot.lua\nconfig.lua\nagent/util.lua\n" }
-  t["boot.lua"] = "-- boot"
+    "# comment\n\ninstall.lua\nconfig.lua\nagent/util.lua\n" }
+  t["install.lua"] = "-- install"
   t["config.lua"] = "-- fresh config"
   t["agent/util.lua"] = "-- util"
   for k, v in pairs(extra or {}) do t[k] = v end
@@ -239,15 +239,18 @@ ok(not r.ok, "no configured source is an error, not a guess")
 ok(tostring(r.err):find("--from", 1, true) ~= nil, "and it names the ways out", r.err)
 ok(#r.asked == 0, "and it asks the network for nothing")
 
--- Nothing in boot.lua may assign a url-shaped literal to anything: the
+-- Nothing in install.lua may assign a url-shaped literal to anything: the
 -- source is configuration, not code. (The behaviour above is the real
 -- guarantee; this catches a default sneaking back in as a constant.)
 local constant
-for line in (slurp("boot.lua") or ""):gmatch("[^\r\n]+") do
+-- Read it without the `or ""` fallback a rename would turn into a silent
+-- pass: an unreadable file must fail here, not quietly check nothing.
+local bootSrc = assert(slurp("install.lua"), "install.lua is not readable")
+for line in bootSrc:gmatch("[^\r\n]+") do
   local code = line:gsub("%-%-.*$", "")
   if code:match('=%s*[\'"][^\'"]*://') then constant = line end
 end
-ok(constant == nil, "no url-valued constant hides in boot.lua", constant)
+ok(constant == nil, "no url-valued constant hides in install.lua", constant)
 
 --------------------------------------------------------------------------
 -- a directory url, the plainest case
@@ -257,7 +260,7 @@ ok(r.ok, "a directory url works, trailing slash and all", r.err)
 ok(r.asked[1] == HOST .. "/manifest.txt", "manifest is fetched first", r.asked[1])
 ok(mock.files["/ccagent/agent/util.lua"] == "-- util", "files land under /ccagent")
 ok(#r.asked == 4, "one request per manifest entry, plus the manifest", #r.asked)
-ok(r.ran and r.ran[1] == "/ccagent/install.lua", "install.lua is handed the setup",
+ok(r.ran and r.ran[1] == "/ccagent/setup.lua", "setup.lua is handed the local setup",
    r.ran and r.ran[1])
 
 --------------------------------------------------------------------------
@@ -336,7 +339,7 @@ r = runBoot({ "--from", "/disk/ccagent" }, {}, onDisk("/disk/ccagent"))
 ok(r.ok, "a floppy is a source", r.err)
 ok(mock.files["/ccagent/agent/util.lua"] == "-- util", "its files land under /ccagent")
 ok(#r.asked == 0, "and http is never touched", #r.asked)
-ok(r.ran and r.ran[1] == "/ccagent/install.lua", "install.lua still gets the setup")
+ok(r.ran and r.ran[1] == "/ccagent/setup.lua", "setup.lua still gets the local setup")
 ok((mock.files["/.ccagent/source"] or ""):find("source=/disk/ccagent", 1, true) ~= nil,
    "the disk is remembered like any other source", mock.files["/.ccagent/source"])
 
@@ -400,21 +403,37 @@ local function fits(text, label)
   ok(count <= 13, label .. " stays inside 13 rows", count)
 end
 
--- install.lua cannot be run here (it needs the whole agent stack and a
+-- setup.lua cannot be run here (it needs the whole agent stack and a
 -- real terminal), so its literals are measured in the source instead.
 -- Weaker than measuring output -- a line built from a runtime value can
 -- still overflow -- but it is what let a 66-column line ship.
 local widestSay, worstSay = 0, ""
-for literal in (slurp("install.lua") or ""):gmatch('say%("([^"]*)"') do
+for literal in (slurp("setup.lua") or ""):gmatch('say%("([^"]*)"') do
   if #literal > widestSay then widestSay, worstSay = #literal, literal end
 end
-ok(widestSay <= 39, "install.lua's lines stay inside 39 columns",
+ok(widestSay <= 39, "setup.lua's lines stay inside 39 columns",
    widestSay .. ": " .. worstSay)
 
 r = runBoot({}, { [HOST] = tree() }, nil, { HOST })
 ok(r.ok, "the asking path still works", r.err)
 fits((r.log:match("^(.-)from> ")), "the source prompt")
 fits((r.log:match("from> (.-)token> ")), "the token prompt")
+
+-- The prompt leads with the common case and hides url templates behind
+-- `?`, because putting {path} first is what made an ordinary answer look
+-- like it needed decoding. Both halves have to fit the screen, and the
+-- second half only appears if someone asks for it.
+local plain = r.log:match("^(.-)from> ") or ""
+ok(plain:find("{path}", 1, true) == nil,
+   "the first prompt does not lead with url templates")
+ok(plain:find("Raw", 1, true) ~= nil,
+   "it says how to derive a source from a forge instead")
+
+r = runBoot({}, { [HOST] = tree() }, nil, { "?", HOST })
+ok(r.ok, "asking for help and then answering works", r.err)
+local helped = r.log:match("from> (.-)from> ") or ""
+ok(helped:find("{path}", 1, true) ~= nil, "? explains url templates", helped)
+fits(helped, "the advanced source help")
 
 --------------------------------------------------------------------------
 -- tokens
@@ -477,7 +496,7 @@ r = runBoot({ "--url", HOST }, { [HOST] = tree(nil, { ["agent/util.lua"] = false
 ok(not r.ok, "a failed download fails the run")
 ok(mock.files["/ccagent/agent/util.lua"] == "-- old but working",
    "and writes nothing, so the old install still runs")
-ok(mock.files["/ccagent/boot.lua"] == nil, "not even the files that did arrive")
+ok(mock.files["/ccagent/install.lua"] == nil, "not even the files that did arrive")
 ok(tostring(r.err):find("untouched", 1, true) ~= nil, "the error says so", r.err)
 
 --------------------------------------------------------------------------

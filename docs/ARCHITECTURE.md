@@ -327,7 +327,7 @@ lands, without needing to be rewritten.
   `claude/session.lua`.
 - **`manifest.txt`** — what gets installed on a CC machine. New file under
   `agent/`, `claude/` or `ui/`? It goes here too, or turtles installed with
-  `boot.lua` will not have it.
+  `install.lua` will not have it.
 - **`CHANGELOG.md`** — what changed and why, including the corrections to
   earlier design mistakes. Worth reading in full at least once; it's
   shorter than re-deriving the same mistakes.

@@ -1,18 +1,18 @@
 # manifest.txt -- every file that belongs on a CC:Tweaked computer.
 #
-# This is the list boot.lua pulls. It is the one place the deployable file
-# set is written down: install.lua no longer keeps its own copy, and
-# test/run_boot.lua fails if this list and the repo ever drift apart.
+# This is the list install.lua pulls. It is the one place the deployable file
+# set is written down: setup.lua no longer keeps its own copy, and
+# test/run_install.lua fails if this list and the repo ever drift apart.
 #
 # Blank lines and "#" comments are ignored. Paths are relative to the repo
 # root and land under /ccagent/ with the same shape. Order matters only for
 # the progress display.
 #
 # Not listed, on purpose: test/ (needs no Minecraft), docs/, README.md,
-# CHANGELOG.md. jobs/ is created at runtime by install.lua.
+# CHANGELOG.md. jobs/ is created at runtime by setup.lua.
 
-boot.lua
 install.lua
+setup.lua
 config.lua
 
 agent/util.lua

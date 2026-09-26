@@ -5,7 +5,7 @@
       lua5.3 test/all.lua
 --------------------------------------------------------------------------]]
 
-local suites = { "test/run.lua", "test/run_lib.lua", "test/run_boot.lua" }
+local suites = { "test/run.lua", "test/run_lib.lua", "test/run_install.lua" }
 local failed = 0
 local total = 0
 

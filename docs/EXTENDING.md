@@ -168,11 +168,11 @@ a clear report is a fine outcome.
 
 ## Shipping it
 
-Add the file to `manifest.txt`. That is the list `boot.lua` pulls onto a
+Add the file to `manifest.txt`. That is the list `install.lua` pulls onto a
 computer or turtle, and it is the only one — a module that is not in it works
 perfectly in the test suite and is simply absent on any machine installed over
 the wire, which surfaces in-game as a `require` failure a long way from the
-cause. `test/run_boot.lua` fails if the manifest and the repo disagree, so
+cause. `test/run_install.lua` fails if the manifest and the repo disagree, so
 running the suite is enough to catch the omission.
 
 ## Adding a capability invalidates saved programs

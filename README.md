@@ -105,23 +105,35 @@ knows which one is driving.
 
 ## Install
 
-Put `boot.lua` on the machine and run it. It is the only file you have to move
-by hand, and where it fetches the rest from is up to you — nothing is baked in:
+`install.lua` is the only file you have to move by hand. Run it in a CC
+terminal and pass it the source to pull the rest from:
 
 ```
-wget run <wherever-you-keep-this>/boot.lua
+wget run https://raw.githubusercontent.com/OWNER/REPO/refs/heads/main/install.lua \
+         https://raw.githubusercontent.com/OWNER/REPO/refs/heads/main
 ```
 
-It asks where to pull from (once), pulls every file `manifest.txt` lists into
-`/ccagent`, and hands off to `install.lua`, which makes the directories, asks
-once for an Anthropic API key (stored in `/.ccagent/key`, nowhere else),
-installs a `/ccagent.lua` launcher, and runs a self-check that prints what
-this particular machine can do.
+The second argument is the **source**: the folder holding the tree. On a forge
+it is the "Raw" URL of any file in the repository with the filename removed —
+which is how to derive it for a fork, a different host, or a branch. Leave it
+off and `install.lua` asks, once, and remembers the answer.
+
+Where it fetches from is never baked into the code: a deployment is a public
+forge, a private one behind a token, a fork, or a folder on a floppy, and
+picking one as "the" default would make the other three second-class. A test
+fails if a URL-valued constant ever reappears in `install.lua`.
+
+It pulls every file `manifest.txt` lists into `/ccagent`, then hands off to
+`setup.lua` — which makes the directories, asks once for an Anthropic API key
+(stored in `/.ccagent/key`, nowhere else), installs a `/ccagent.lua` launcher,
+and runs a self-check that prints what this particular machine can do.
+**You do not run `setup.lua` yourself**; `install.lua` runs it for you. It is
+a separate file so the download logic lives in exactly one place.
 
 Run it as `/ccagent` — absolute. CC's shell path is `.:/rom/programs`, so the
 bare name `ccagent` only resolves when your current directory is `/`.
 
-Mistyped the key? `/ccagent/install --key` asks again. It reports the length it
+Mistyped the key? `/ccagent/setup --key` asks again. It reports the length it
 stored and warns if the value does not look like an Anthropic key, because the
 alternative is finding out at the first request.
 
@@ -173,7 +185,7 @@ slash needs the explicit `--ref`.
 run, save the file first and then run it:
 
 ```
-wget <wherever-you-keep-this>/boot.lua
+wget <wherever-you-keep-this>/install.lua
 boot --url https://files.mylan:8080/ccagent
 ```
 
@@ -201,7 +213,7 @@ with the `id` command in-game — and run the installer:
 <save>/computercraft/computer/<id>/ccagent/     <- the tree goes here
 ```
 ```
-/ccagent/install
+/ccagent/setup
 ```
 
 For more than one, use a floppy, which is the same idea but reusable. Put the
@@ -214,7 +226,7 @@ tree in a disk's folder, then put that disk in a drive next to each turtle:
 /disk/ccagent/boot --from /disk/ccagent
 ```
 
-That runs `boot.lua` straight off the floppy: it reads `manifest.txt` from the
+That runs `install.lua` straight off the floppy: it reads `manifest.txt` from the
 disk, writes `/ccagent`, keeps any `config.lua` already on the turtle, and
 hands off to `install.lua` as usual. The disk is remembered as the source, so
 updating a turtle later is `/ccagent update` with the floppy in the drive —
@@ -228,10 +240,10 @@ switched off entirely.
 If you would rather pull over the wire, `--token <secret>` sends
 `Authorization: Bearer <secret>` with every request and stores the token in
 `/.ccagent/token` — not in `/.ccagent/source`, so the source file stays safe to
-copy between turtles. When a token is present `boot.lua` also asks for raw
+copy between turtles. When a token is present `install.lua` also asks for raw
 content rather than metadata, since a forge that answers a file request with
 base64 JSON would otherwise install a tree that fails later as a syntax error.
-(If it ever does, `boot.lua` says so instead of writing it.) Override with
+(If it ever does, `install.lua` says so instead of writing it.) Override with
 `--header "Accept: …"`.
 
 For GitHub, the contents API serves private files to a fine-grained token with
@@ -271,11 +283,11 @@ the two above are where current builds put them.
 Use the floppy route above, or copy the tree to `/ccagent/` by hand and run:
 
 ```
-/ccagent/install
+/ccagent/setup
 ```
 
-`/ccagent/install <base-url>` also still works for a plain directory url: it
-fetches `boot.lua` and lets it do the pulling, so the file list only ever lives
+`/ccagent/setup <base-url>` also still works for a plain directory url: it
+fetches `install.lua` and lets it do the pulling, so the file list only ever lives
 in `manifest.txt`.
 
 Requirements: CC:Tweaked with the HTTP API enabled (default) and
@@ -600,17 +612,17 @@ agent/     util geom state caps world nav inv block job
            registry contract lint lib init
 claude/    client prompt extract executor session config
 ui/        console jobs net controller worker host
-test/      mock run run_lib run_boot all   -- lua5.3 test/all.lua, no Minecraft
+test/      mock run run_lib run_install all  -- lua5.3 test/all.lua, no Minecraft
 jobs/      where saved/registered routines land at runtime (gitignored)
-boot.lua manifest.txt    one-command install, and the list of what it pulls
-config.lua install.lua
+install.lua manifest.txt one-command install, and the list of what it pulls
+config.lua setup.lua     local setup, run by install.lua -- not by you
 CLAUDE.md              entry point for an agentic coding session
 docs/ARCHITECTURE.md   core internals, invariants, and known unknowns
 docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 587
+`lua5.3 test/all.lua` runs the three suites against a mock world — 593
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

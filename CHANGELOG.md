@@ -6,6 +6,37 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Changed — breaking**
+
+- The installer is now `install.lua`, and the local setup it hands off to
+  is `setup.lua`. Previously `boot.lua` was the installer and `install.lua`
+  was the setup step, which is backwards from what the names promise: the
+  file called "install" was the one you must not run, and running it on a
+  bare machine wrote a launcher and then failed a self-check with a Lua
+  module error about `agent.init`.
+
+  No compatibility shim. An existing machine's `ccagent update` runs a
+  `boot.lua` that no longer exists in the manifest, so it must be
+  re-bootstrapped once with the install line from `README.md`; after that
+  the regenerated launcher points at the new name. `test/run_boot.lua` is
+  `test/run_install.lua`.
+
+  One of its checks read `boot.lua` with an `or ""` fallback, which a
+  rename would have turned into a silent pass — the no-hardcoded-url
+  assertion would have kept passing while checking an empty string. It
+  asserts the file is readable now.
+
+- `install.lua` asks for a source differently. The old prompt led with
+  `{path}`, so the exotic case was the first thing anyone read and an
+  ordinary answer looked like it needed decoding. It now shows the common
+  case — a folder, or a forge's "Raw" URL minus the filename — and hides
+  url templates behind `?`. Both halves are measured against the 39x13
+  screen.
+
+- `setup.lua` refuses to run on a machine with no library rather than
+  half-installing one, and names `install.lua` as the thing to run.
+
+
 **Changed**
 
 - `/share`'s sink is now *described* in config rather than assumed by the

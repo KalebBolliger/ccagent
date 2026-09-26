@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-587 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+593 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -64,8 +64,8 @@ does — nothing here currently relies on anything past 5.1.
 | `agent/` | the capability library: nav, block, inv, world, job, caps, registry, contract, lint, lib |
 | `claude/` | the LLM layer: API client, prompt assembly, code extraction, sandboxed executor, session/repair loop |
 | `ui/` | the two front ends (`controller` standalone, `host`+`worker` fleet) and their shared bits |
-| `test/` | `mock.lua` (fake CC:Tweaked world) + `run.lua`/`run_lib.lua`/`run_boot.lua`/`all.lua` |
-| `boot.lua`, `manifest.txt` | the bootstrapper and the one list of what ships to a CC machine |
+| `test/` | `mock.lua` (fake CC:Tweaked world) + `run.lua`/`run_lib.lua`/`run_install.lua`/`all.lua` |
+| `install.lua`, `setup.lua`, `manifest.txt` | the bootstrapper, the local setup it hands off to, and the one list of what ships to a CC machine |
 | `jobs/` | where saved/registered operator routines land at runtime (`.gitignore`d; see its `.gitkeep`) |
 
 ## Read before you touch it
@@ -133,7 +133,7 @@ Nothing should come back but `noreply@anthropic.com`.
   a turtle's screen — and CC terminals have no scrollback, so a prompt
   taller than the screen scrolls its own explanation away before it can be
   read. Put the detail in `README.md` and keep the in-game text to what
-  someone needs at that moment. `test/run_boot.lua` measures the
+  someone needs at that moment. `test/run_install.lua` measures the
   bootstrapper's prompts; nothing measures the rest, so check by eye.
 - **Zero is true in Lua.** Never make a caller derive a boolean from a
   count. `block.fill` returned `info.unreachable = 0` on a perfect run
@@ -212,7 +212,7 @@ Nothing should come back but `noreply@anthropic.com`.
   game decide *membership*.
 - A new file under `agent/`, `claude/` or `ui/` has to be added to
   `manifest.txt` as well, or turtles installed over the wire will not get
-  it. `test/run_boot.lua` catches this; `lua5.3 test/all.lua` is the only
+  it. `test/run_install.lua` catches this; `lua5.3 test/all.lua` is the only
   thing standing between that mistake and a confusing in-game failure.
 - Keep `registry.add` (and the contract-header equivalent for saved
   routines) as the *only* way a capability becomes visible to the model.

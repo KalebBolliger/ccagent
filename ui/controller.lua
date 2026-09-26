@@ -13,7 +13,7 @@
 
 -- The tree lives at /ccagent (agent/lib.lua and claude/config.lua say so
 -- too). CC also searches the running program's own directory, which is
--- why a wrong prefix here still works from /ccagent/install.lua and
+-- why a wrong prefix here still works from /ccagent/setup.lua and
 -- fails from /ccagent/ui/ one level down.
 package.path = "/ccagent/?.lua;/ccagent/?/init.lua;" .. (package.path or "")
 
@@ -421,7 +421,7 @@ local function command(input, ctx)
       if yn and yn:lower():sub(1, 1) == "y" then
         -- boot is all-or-nothing, so a failed pull leaves this install
         -- intact and the reboot just restarts what was already here.
-        shell.run("/ccagent/boot.lua")
+        shell.run("/ccagent/install.lua")
         console.status("rebooting...")
         os.reboot()
       end

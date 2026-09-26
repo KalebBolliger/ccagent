@@ -14,7 +14,7 @@
 
 -- The tree lives at /ccagent (agent/lib.lua and claude/config.lua say so
 -- too). CC also searches the running program's own directory, which is
--- why a wrong prefix here still works from /ccagent/install.lua and
+-- why a wrong prefix here still works from /ccagent/setup.lua and
 -- fails from /ccagent/ui/ one level down.
 package.path = "/ccagent/?.lua;/ccagent/?/init.lua;" .. (package.path or "")
 
