@@ -764,18 +764,26 @@ do
       fuelLine = fuelLine or line
     end
   end
+  -- Match identifiers, not sentences. Rewording the guidance should not
+  -- fail the suite; deleting it should. An earlier version of this group
+  -- asserted an exact English sentence was present and an older one
+  -- absent -- which pinned punctuation forever and still would not have
+  -- caught contradictory guidance added in different words.
   ok(fuelLine ~= nil, "nav.fuel is listed", manifest:sub(1, 80))
-  ok(fuelLine and fuelLine:lower():find("do not gate", 1, true) ~= nil,
-     "and its doc says not to gate on it", fuelLine)
   ok(fuelLine and fuelLine:find("refuel", 1, true) ~= nil,
-     "naming what happens instead", fuelLine)
+     "and its doc sends the reader to refuelling rather than leaving the "
+     .. "number bare", fuelLine)
 
+  -- Against prompt.RULES, not the assembled system block: the manifest
+  -- is part of that block and lists nav.fuel and nav.ensureFuel as
+  -- signatures, so searching the whole thing matched the API listing and
+  -- passed happily with the guidance deleted.
   local prompt = require("claude.prompt")
-  local sys = prompt.system({ cache = false })[1].text
-  ok(sys:find("do NOT gate a job on nav.fuel()", 1, true) ~= nil,
-     "and the prompt says it in the imperative")
-  ok(sys:find("check what it is carrying before concluding", 1, true) == nil,
-     "the older phrasing is gone rather than stacked on top of")
+  ok(prompt.RULES:find("nav.fuel", 1, true) ~= nil,
+     "the rules name the accessor that misleads")
+  ok(prompt.RULES:find("moveTo", 1, true) ~= nil,
+     "and what already handles it -- losing either means the rule went "
+     .. "missing, whatever the wording")
 end
 
 --------------------------------------------------------------------------

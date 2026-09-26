@@ -6,6 +6,23 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Testing**
+
+- The guard on the fuel guidance matched English sentences, including one
+  assertion that an *older* phrasing was absent. That one failed at its
+  own purpose: it caught exactly one sentence returning, so contradictory
+  guidance added in any other words would have passed, and meanwhile it
+  pinned the punctuation of a prose rule forever.
+
+  Both now match identifiers, which do not change when wording does. The
+  first attempt at that searched the assembled system block — which
+  contains the API manifest, and therefore the strings `nav.fuel` and
+  `nav.ensureFuel` as signatures — so it passed happily with the rule
+  deleted. It searches `prompt.RULES` instead. Deleting either the rule
+  or `nav.fuel`'s manifest doc now fails the suite; rewording either does
+  not.
+
+
 **Fixed**
 
 - A turtle carrying 64 coal and 64 coal blocks asked the operator to
