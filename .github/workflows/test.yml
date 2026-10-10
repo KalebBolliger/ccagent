@@ -1,0 +1,82 @@
+# The suite runs under two interpreters on purpose.
+#
+# lua5.3 is what a contributor has to hand and what CLAUDE.md documents.
+# lua5.1 is the closer analogue of the real deployment target: CC:Tweaked
+# runs Cobalt, roughly 5.1, so a 5.2/5.3-only feature passes locally and
+# fails in-game. 5.1 is in fact *stricter* than Cobalt, which backports
+# some later features -- so a 5.1-only failure wants reading against the
+# CC:Tweaked source rather than obeying. Erring strict is still better
+# than the previous state, which checked nothing.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lua: ["5.3", "5.1"]
+    name: lua ${{ matrix.lua }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install lua ${{ matrix.lua }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends lua${{ matrix.lua }}
+
+      # Every tracked .lua, not just what the suite requires. Both front
+      # ends, the bootstrapper and the shipped config are loaded by no
+      # test, so until now a stray `end` in ui/host.lua passed the suite
+      # and failed on a turtle.
+      - name: parse every file
+        run: |
+          fail=0
+          for f in $(git ls-files '*.lua'); do
+            luac${{ matrix.lua }} -p "$f" || { echo "parse failed: $f"; fail=1; }
+          done
+          exit $fail
+
+      - name: suite
+        run: lua${{ matrix.lua }} test/all.lua
+
+  history:
+    runs-on: ubuntu-latest
+    name: nothing private in the history
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the grep is over all of it, not the tip
+
+      # The check CLAUDE.md asks for before every push, which until now
+      # ran only when somebody remembered. A leak caught on a branch is a
+      # branch to rewrite; caught after merge it is public and permanent.
+      #
+      # What it catches: email addresses, handles carrying a domain, and
+      # session or conversation links. What it does NOT catch: a bare
+      # hostname, an IP, a world seed, or base coordinates -- no pattern
+      # for those survives contact with ordinary prose and a repo whose
+      # own source mentions paste.rs and raw.githubusercontent.com. A
+      # green check here is not "no identifying details"; it is "none of
+      # the three mechanically findable kinds". The rest is still a
+      # judgement call every commit message needs.
+      - name: no secrets, addresses or session links in commits
+        run: |
+          # Strip the one permitted address before looking, rather than
+          # dropping every line that mentions it -- a second address on
+          # the same line as the trailer would survive the filter and be
+          # missed by it.
+          hits=$(git log --format='%an <%ae>%n%B' \
+                 | sed 's/noreply@anthropic\.com//g' \
+                 | grep -niE 'session_|claude\.ai/code|@[a-z0-9.-]+\.[a-z]{2,}' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo
+            echo "See CLAUDE.md 'Never commit'. Nothing but noreply@anthropic.com belongs here."
+            exit 1
+          fi
+          echo "clean"
