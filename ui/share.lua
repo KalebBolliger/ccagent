@@ -54,13 +54,17 @@ local function tailFile(path, n)
 end
 
 --- Everything worth knowing about the last run, as one blob of text.
----   parts { version, settings, situation, request, code, result, log }
+---   parts { version, origin, settings, situation, request, code, result, log }
 --- Every field is optional; a bundle of what is known beats none.
 function share.bundle(parts)
   parts = parts or {}
   local out = {}
   out[#out + 1] = "ccagent report"
   if parts.version then out[#out + 1] = "version: " .. tostring(parts.version) end
+  -- Which copy of the library this was. A version number cannot tell two
+  -- branches apart, so without this a report from a feature branch reads
+  -- as a report from main and sends the reader to the wrong source.
+  if parts.origin then out[#out + 1] = "origin: " .. tostring(parts.origin) end
   if parts.settings then out[#out + 1] = "settings: " .. tostring(parts.settings) end
 
   if parts.situation then
@@ -118,6 +122,7 @@ function share.gather(ctx)
   local sharingJob = ctx.job ~= nil
   return share.bundle({
     version   = ctx.version,
+    origin    = ctx.origin,
     settings  = ctx.settings,
     situation = ctx.situation,
     job       = ctx.job,

@@ -823,6 +823,61 @@ do
 end
 
 --------------------------------------------------------------------------
+group("which copy of the library is this machine running")
+do
+  local origin = require("ui.origin")
+
+  local function stored(body)
+    mock.reset()
+    mock.files[origin.path] = body
+  end
+
+  -- The format is install.lua's, parsed back rather than shared: that
+  -- file owns the writing, and a second writer would be a second thing
+  -- to keep in step.
+  stored("# comment\nsource=https://raw.example/{repo}/{ref}/{path}\n" ..
+         "repo=someone/ccagent\nref=my-branch\nheader.X-Key=abc\n")
+  local conf = origin.read()
+  ok(conf.ref == "my-branch", "the stored ref is read back", conf.ref)
+  ok(conf.repo == "someone/ccagent", "and the repo", conf.repo)
+  ok(conf.headers["X-Key"] == "abc", "and a header line is not a key named "
+     .. "header.X-Key", tostring(conf.headers["X-Key"]))
+
+  -- A source with a ref and no ref= line is on install.lua's default,
+  -- which is the quiet case: nothing to say and nothing printed.
+  stored("source=https://raw.example/{repo}/{ref}/{path}\nrepo=a/b\n")
+  ok(origin.ref() == "main", "an unset ref reports the default", origin.ref())
+  ok(origin.offDefault() == false, "and is not flagged as unusual")
+  ok(origin.line() == nil, "so a plain install prints no extra line",
+     tostring(origin.line()))
+  ok(origin.line({ always = true }) ~= nil,
+     "though /doctor can ask for it anyway")
+
+  -- Off the default is the state you forget you are in, so it speaks up
+  -- without being asked.
+  stored("source=https://raw.example/{repo}/{ref}/{path}\nrepo=a/b\nref=wip\n")
+  local line = origin.line()
+  ok(line ~= nil and line:find("wip", 1, true) ~= nil,
+     "a branch install says which branch, unprompted", tostring(line))
+  ok(line and #line <= 39, "and fits a turtle screen", line and #line)
+
+  -- A floppy install has a source and no ref at all. Reporting "main"
+  -- there would be a claim about a branch nothing was pulled from.
+  stored("source=/disk/ccagent\n")
+  ok(origin.ref() == nil, "a local source has no ref to report",
+     tostring(origin.ref()))
+  ok(origin.line() == nil, "and nothing unusual to announce")
+  ok((origin.line({ always = true }) or ""):find("/disk/ccagent", 1, true) ~= nil,
+     "but /doctor still says where it came from",
+     origin.line({ always = true }))
+
+  -- No file at all: a hand-copied tree. Must not error.
+  mock.reset()
+  ok(origin.ref() == nil and origin.line() == nil,
+     "a machine with no stored source answers nil, not an error")
+end
+
+--------------------------------------------------------------------------
 group("share: getting a failure off a screen with no scrollback")
 do
   local share = require("ui.share")
@@ -838,6 +893,13 @@ do
                           "job.report(1)", "boom", "line one" }) do
     ok(text:find(want, 1, true) ~= nil, "bundle carries " .. want)
   end
+
+  -- A version number cannot tell two branches apart. Without the origin
+  -- a report from a feature branch reads as one from main and sends
+  -- whoever reads it to the wrong source.
+  local branched = share.bundle({ version = "1.2.0", origin = "ref wip  a/b" })
+  ok(branched:find("ref wip", 1, true) ~= nil,
+     "and which copy of the library produced it", branched)
 
   -- Missing pieces are omitted, not rendered as "nil".
   local sparse = share.bundle({ version = "1.2.0" })

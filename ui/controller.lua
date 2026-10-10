@@ -25,6 +25,7 @@ local session  = require("claude.session")
 local executor = require("claude.executor")
 local console  = require("ui.console")
 local jobs     = require("ui.jobs")
+local origin   = require("ui.origin")
 
 local M = {}
 
@@ -95,7 +96,7 @@ local HELP = {
   "/stats          token usage this session",
   "/doctor         version, transport, one test call",
   "/share [name]   post the last run, or a saved program, somewhere readable",
-  "/update         pull the latest code, then reboot",
+  "/update [ref]   pull the latest code (or a branch), then reboot",
   "/exit",
 }
 
@@ -359,6 +360,11 @@ local function command(input, ctx)
     local client = require("claude.client")
     local s = client.settings(cfg)
     console.head("ccagent " .. agent.VERSION)
+    -- A version number cannot tell two branches apart, and with branch
+    -- development the ref is the half of "is this the code you think it
+    -- is" that actually moves. Always shown here, unlike elsewhere:
+    -- /doctor is the place you come to to stop guessing.
+    console.info(origin.line({ always = true }) or "no source stored")
     console.info(("stream %s  read %ds  wait %ds"):format(
       s.stream and "on" or "OFF", s.readTimeout, s.timeout))
     console.info(("%s  %d tok"):format(
@@ -392,6 +398,7 @@ local function command(input, ctx)
       local gathered = {
         sess = sess, lastRequest = ctx.lastRequest,
         version = agent.VERSION, logFile = cfg.logFile,
+        origin  = origin.line({ always = true }),
         situation = agent.situation(),
         settings = ("%s %d tok effort %s"):format(st.model, st.maxTokens,
                                                   st.effort),
@@ -448,11 +455,22 @@ local function command(input, ctx)
     if not _G.shell then
       console.warn("no shell; run ccagent update")
     else
-      local yn = console.ask("pull and reboot? [y/N] ")
+      -- A ref given here is passed as --ref, never as a bare argument.
+      -- install.lua reads a bare "owner/name"-shaped word as a repo, and
+      -- every branch this project is developed on looks exactly like
+      -- that ("claude/some-branch"), so the bare form would silently
+      -- repoint the source instead of changing the branch.
+      local ref = util.trim(rest or "")
+      local target = ref ~= "" and ref or (origin.ref() or "the stored source")
+      local yn = console.ask(("pull %s and reboot? [y/N] "):format(target))
       if yn and yn:lower():sub(1, 1) == "y" then
-        -- boot is all-or-nothing, so a failed pull leaves this install
+        -- install is all-or-nothing, so a failed pull leaves this install
         -- intact and the reboot just restarts what was already here.
-        shell.run("/ccagent/install.lua")
+        if ref ~= "" then
+          shell.run("/ccagent/install.lua", "--ref", ref)
+        else
+          shell.run("/ccagent/install.lua")
+        end
         console.status("rebooting...")
         os.reboot()
       end

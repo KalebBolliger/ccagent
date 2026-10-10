@@ -322,14 +322,30 @@ local function readLocal(path)
 end
 
 --- A file over http.
+---
+--- CC hands a failing status back as a FAILURE, not as a response with a
+--- code: HttpRequestHandler queues http_success only for 200..399 and
+--- otherwise calls request.failure(status.reasonPhrase(), stream), so
+--- http.get returns nil, "Not Found", <handle> for a 404. Reading the
+--- code off the first return value therefore never happens on an error
+--- -- which is what the third value is for, and what claude/client.lua
+--- and ui/share.lua already do. The reason phrase alone carries no
+--- number, and "Not Found" with no 404 beside it is a worse error than
+--- it needs to be.
 local function readRemote(path)
   local u = locate(path)
-  local res, err = http.get(u, next(headers) and headers or nil)
-  if not res then return nil, (err or "no response") .. "  <- " .. u end
-  local code = res.getResponseCode and res.getResponseCode() or 200
+  local res, err, errRes = http.get(u, next(headers) and headers or nil)
+  if not res then
+    local why = err or "no response"
+    if errRes then
+      local code = errRes.getResponseCode and errRes.getResponseCode() or nil
+      if errRes.close then errRes.close() end
+      if code then why = ("%s (%d)"):format(why, code) end
+    end
+    return nil, why .. "  <- " .. u
+  end
   local data = res.readAll()
   res.close()
-  if code >= 400 then return nil, ("HTTP %d  <- %s"):format(code, u) end
   if not data or data == "" then return nil, "empty file  <- " .. u end
   -- Some forges answer a file request with JSON metadata carrying base64
   -- content. Writing that to disk would produce a tree that installs
@@ -368,9 +384,24 @@ print("  from " .. locate("{path}") ..
 
 local text, err = fetch(MANIFEST)
 if not text then
-  error("could not read the manifest.\n" .. err .. "\n" ..
-        (isLocal and "is the disk in, and that path right?"
-                 or "check the url, the ref and any token."), 0)
+  -- When the ref is not the default, say so first. A branch that has
+  -- been merged and deleted is the likeliest reason a machine that
+  -- worked yesterday cannot read the manifest today: the stored ref
+  -- outlives the branch, so a turtle left on one keeps asking for
+  -- something that is no longer there.
+  --
+  -- Deliberately not conditioned on the status code. CC's http.get
+  -- reports a failing request through its error string and the exact
+  -- wording is not ours, so a hint gated on matching it would be a hint
+  -- that never fires. Any failure plus an unusual ref is enough to earn
+  -- one line naming the ref, and the generic suspects still follow.
+  local hint = isLocal and "is the disk in, and that path right?"
+                        or "check the url, the ref and any token."
+  if not isLocal and ref ~= DEFAULT_REF then
+    hint = ("ref is '%s' -- merged and deleted?\n"):format(ref)
+        .. ("back to the default: install %s\n"):format(DEFAULT_REF) .. hint
+  end
+  error("could not read the manifest.\n" .. err .. "\n" .. hint, 0)
 end
 local list = parseManifest(text)
 

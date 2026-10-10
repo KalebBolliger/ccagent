@@ -323,7 +323,7 @@ Anything that is not a slash command is a request.
 | `/stats` | token usage, including cache hits |
 | `/doctor` | version, transport settings, and one live test request |
 | `/share [name]` | post the last run — or a saved program — somewhere you can read it |
-| `/update` | pull the latest code and reboot |
+| `/update [ref]` | pull the latest code, or a branch, and reboot |
 
 Press **Q** while a job runs to ask it to stop at the next checkpoint; press it
 again to force.
@@ -592,6 +592,25 @@ repository having an opinion about which one you use.
 reboot, without leaving the controller. The pull is all-or-nothing, so a
 failed one leaves the install untouched.
 
+### Running a branch
+
+`/update <ref>` pulls that branch instead, and the ref sticks: every bare
+`/update` after it stays there until you say otherwise. That makes trying
+an unfinished change a one-word operation and makes forgetting you did a
+real hazard, so `/doctor` always prints the ref, every `/share` report
+carries it, and a turtle on anything other than `main` says so without
+being asked.
+
+Pass the ref to `/update`, not to `install.lua` as a bare word: a bare
+argument shaped like `owner/name` is read as a *repository*, and branch
+names like `claude/some-branch` are shaped exactly like that. `/update`
+passes `--ref` for you; from the shell, write `install.lua --ref
+claude/some-branch`.
+
+When a branch is merged and deleted the stored ref outlives it, so the
+next pull fails. The error names the ref and the way back
+(`install.lua main`).
+
 ## Cost control
 
 - **Keep `cache = true`.** It is most of the savings. `/stats` shows cache
@@ -660,7 +679,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 667
+`lua5.3 test/all.lua` runs the three suites against a mock world — 692
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

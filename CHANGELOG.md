@@ -8,6 +8,57 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- CI runs the suite under lua5.1 as well as 5.3, parses every tracked
+  `.lua` file, and greps the history for the things `CLAUDE.md` forbids
+  committing. The 5.1 run is the one that matters: the deployment target
+  is Cobalt, roughly 5.1, and until now nothing checked that a change had
+  not reached for a 5.2/5.3-only feature. The whole suite already passed
+  under 5.1 unchanged. 5.1 is stricter than Cobalt, which backports some
+  later features, so a 5.1-only failure wants reading against the
+  CC:Tweaked source rather than obeying.
+
+  The parse sweep exists because the suite only loads what it requires:
+  both front ends, `ui/net`, the bootstrapper and the shipped config are
+  required by no test, so a syntax error in any of them passed the suite
+  and failed on a turtle.
+
+- `/update <ref>` pulls a branch, and `ui/origin.lua` reads back the ref
+  `install.lua` stored so the machine can say which copy of the library
+  it is running. The ref sticks across later bare updates -- that is the
+  useful behaviour and the hazard, so `/doctor` always prints it, every
+  `/share` report carries it, and a turtle on anything but the default
+  says so unprompted. Not added to `agent.situation()`: that string is
+  written for the model, and which branch the library came from is not
+  something a generated program should reason about.
+
+  The ref is passed as `--ref`, never as a bare argument. `install.lua`
+  reads a bare `owner/name`-shaped word as a repository, and branch names
+  are shaped exactly like that, so the bare form would silently repoint
+  the source instead of changing the branch. A test now pins both halves
+  of that ambiguity.
+
+**Fixed**
+
+- `install.lua` read a failing status off the wrong return value.
+  CC:Tweaked queues `http_success` only for 200..399 and otherwise calls
+  `request.failure(status.reasonPhrase(), stream)`, so `http.get` answers
+  a 404 with `nil, "Not Found", <handle>` -- the code is reachable only
+  through the third value, which the bootstrapper discarded. Its
+  `code >= 400` branch was therefore unreachable, and a 404 reported
+  itself as `Not Found` with no number. `claude/client.lua` and
+  `ui/share.lua` already took the error response; this now matches them.
+
+  `test/mock.lua`'s http fake was corrected first, since it had been
+  returning `"404 Not Found"` as the message -- a string that would let
+  code grepping for a number pass the suite and fail in-game.
+
+- A failed pull on a non-default ref says so. The stored ref outlives the
+  branch, so a merged and deleted branch leaves a turtle asking for
+  something that is not there; the error now names the ref and the way
+  back instead of offering three suspects. Deliberately not gated on
+  matching a status code in the message, since the wording is CC's and a
+  hint matching it would be a hint that never fires.
+
 - `block.pattern(rows, opts)` builds a 2D picture as an upright wall:
   `block.pattern({" XX ", "XXXX"}, { map = { X = "minecraft:green_wool" } })`.
   Row 1 is the top, a space or an unmapped character leaves the cell

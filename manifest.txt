@@ -38,6 +38,7 @@ claude/session.lua
 claude/config.lua
 
 ui/console.lua
+ui/origin.lua
 ui/jobs.lua
 ui/share.lua
 ui/net.lua

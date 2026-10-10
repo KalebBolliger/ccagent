@@ -172,11 +172,29 @@ local BOOT = assert(loadfile("install.lua"))
 --- Run install.lua against a fake http server.
 --  served: url-prefix -> { path -> content }, content false to fail it.
 --  answers: queued replies for read(), when the run is expected to prompt.
+--
+-- The failure shape is CC's, not a plausible one. HttpRequestHandler
+-- queues http_success only for 200..399 and otherwise calls
+-- request.failure(status.reasonPhrase(), stream), so http.get answers a
+-- 404 with nil, "Not Found", <handle> -- the reason phrase with no number
+-- in it, and the code only reachable through the third value. A mock that
+-- returned "404 Not Found" as the message would let code that greps the
+-- string for a number pass here and fail in-game, which is how the last
+-- two in-game failures happened.
 local function runBoot(args, served, existing, answers)
   mock.reset()
   for path, body in pairs(existing or {}) do mock.files[path] = body end
 
   local asked, sentHeaders = {}, {}
+  local function failure(code, phrase)
+    local closed = false
+    return nil, phrase, {
+      getResponseCode = function() return code end,
+      readAll = function() return "" end,
+      close = function() closed = true end,
+      wasClosed = function() return closed end,
+    }
+  end
   _G.http = {
     get = function(url, headers)
       asked[#asked + 1] = url
@@ -185,13 +203,13 @@ local function runBoot(args, served, existing, answers)
         local rest = url:sub(1, #prefix) == prefix and url:sub(#prefix + 2) or nil
         if rest and files[rest] ~= nil then
           local body = files[rest]
-          if body == false then return nil, "404 Not Found" end
+          if body == false then return failure(404, "Not Found") end
           return { readAll = function() return body end,
                    close = function() end,
                    getResponseCode = function() return 200 end }
         end
       end
-      return nil, "404 Not Found"
+      return failure(404, "Not Found")
     end,
   }
 
@@ -517,6 +535,63 @@ ok(not r.ok and tostring(r.err):find("suspect", 1, true) ~= nil,
 r = runBoot({ "--nope" }, { [HOST] = tree() })
 ok(not r.ok and tostring(r.err):find("unknown option", 1, true) ~= nil,
    "an unknown option is refused rather than guessed at", r.err)
+
+--------------------------------------------------------------------------
+-- a bare word is a ref, but a bare SLASHED word is a repo
+
+-- This is the ambiguity /update has to steer around. Every branch this
+-- project is developed on is shaped exactly like owner/name
+-- ("claude/some-branch"), so a bare branch name silently repoints the
+-- source at a repository that does not exist instead of changing the
+-- branch -- and the failure arrives as a 404 on a url nobody recognises.
+-- Hence `install --ref <branch>`, and hence the controller passing the
+-- flag rather than the word.
+local TPL2 = "https://raw.example/{repo}/{ref}/{path}"
+r = runBoot({ "--url", TPL2, "claude/my-branch" },
+            { ["https://raw.example/claude/my-branch/main"] = tree() })
+ok(r.ok, "a slashed bare word is taken as the REPO, not the ref", r.err)
+ok(r.asked[1] == "https://raw.example/claude/my-branch/main/manifest.txt",
+   "and lands on the default ref of a repo that does not exist", r.asked[1])
+
+r = runBoot({ "--url", TPL2, "--repo", "a/b", "--ref", "claude/my-branch" },
+            { ["https://raw.example/a/b/claude/my-branch"] = tree() })
+ok(r.ok, "--ref takes the same word as a branch", r.err)
+ok(r.asked[1] == "https://raw.example/a/b/claude/my-branch/manifest.txt",
+   "and a slash in a branch name is fine in the url", r.asked[1])
+
+--------------------------------------------------------------------------
+-- a vanished ref says so
+
+-- The stored ref outlives the branch: merge, delete, and a turtle left on
+-- it keeps asking for something that is not there. The hint is not gated
+-- on the status code, because CC reports a failing request through
+-- status.reasonPhrase() -- "Not Found", with no number in it -- so a hint
+-- matching a code in the message would be a hint that never fires.
+r = runBoot({ "--url", TPL2, "--repo", "a/b", "--ref", "merged-and-gone" }, {})
+ok(not r.ok, "a ref that is not there fails")
+-- Twice, not once. The generic error already prints the url it tried,
+-- and that url contains the ref -- so "the message mentions the ref"
+-- passes with the hint deleted. A second occurrence is the hint itself.
+local _, refMentions = tostring(r.err):gsub("merged%-and%-gone", "")
+ok(refMentions >= 2, "and the hint names the ref, not just the url it tried",
+   refMentions .. " mentions in: " .. tostring(r.err))
+ok(tostring(r.err):find("install main", 1, true) ~= nil,
+   "and the way back to the default", r.err)
+
+-- On the default ref there is no branch to blame, and saying so would
+-- send the operator after the wrong thing.
+r = runBoot({ "--url", TPL2, "--repo", "a/b" }, {})
+ok(not r.ok, "a broken source on the default ref still fails")
+ok(tostring(r.err):find("merged", 1, true) == nil,
+   "without inventing a deleted branch", r.err)
+
+-- CC hands a failing status back as nil + reason phrase + handle, so the
+-- number is only reachable through the third value. Taking it turns
+-- "Not Found" into "Not Found (404)".
+ok(tostring(r.err):find("Not Found", 1, true) ~= nil,
+   "the reason phrase survives into the message", r.err)
+ok(tostring(r.err):find("404", 1, true) ~= nil,
+   "with the code recovered from the error response", r.err)
 
 r = runBoot({ "--ref" }, { [HOST] = tree() })
 ok(not r.ok, "a flag with no value is refused", r.err)
