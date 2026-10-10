@@ -6,6 +6,24 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Added**
+
+- `/share <name>` posts a saved program rather than the last run, with
+  its registration state and any lint findings. The program worth asking
+  about is often not the one that happened to run most recently, and
+  until now there was no way to send it. Bare `/share` is unchanged.
+
+  The saved file's own header already carries its name, save date and the
+  request that produced it, so the bundle adds only what the file cannot
+  say about itself.
+
+  It drops the session's last result on purpose. That output belongs to
+  whatever ran most recently, which is usually a different program, and a
+  report pairing one program's source with another's error reads as a
+  single coherent story and is simply false. A test removes the guard and
+  checks the suite fails.
+
+
 **Testing**
 
 - The guard on the fuel guidance matched English sentences, including one

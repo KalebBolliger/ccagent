@@ -912,6 +912,47 @@ do
   ok(mock.http.requests[1].body:find("redacted", 1, true) ~= nil,
      "and its absence is visible rather than silent")
 
+  -- /share <name> sends a saved program. The invariant that matters: the
+  -- session's last result belongs to whatever ran most recently, which is
+  -- usually a different program, so pairing one program's source with
+  -- another's output would be worse than carrying no output at all.
+  local fakeSession = {
+    lastCode = "-- the last thing that RAN",
+    lastResult = { ok = false, error = "boom", output = "from another job" },
+  }
+  local jobText = share.gather({
+    sess = fakeSession, lastRequest = "an unrelated request",
+    version = "1.2.0",
+    code = "-- ccagent job: wheat\nlocal x = 1",
+    job = { name = "wheat", facts = { "saved only, not registered" } },
+  })
+  ok(jobText:find("ccagent job: wheat", 1, true) ~= nil,
+     "the saved source is what gets sent")
+  ok(jobText:find("name: wheat", 1, true) ~= nil, "named")
+  ok(jobText:find("not registered", 1, true) ~= nil,
+     "with the facts the file cannot state about itself")
+  ok(jobText:find("the last thing that RAN", 1, true) == nil,
+     "and not the last program to run")
+  ok(jobText:find("boom", 1, true) == nil,
+     "nor that program's error")
+  ok(jobText:find("from another job", 1, true) == nil,
+     "nor its output")
+  ok(jobText:find("an unrelated request", 1, true) == nil,
+     "nor the request that produced it")
+
+  -- Bare /share is unchanged: last run, with its result.
+  local runText = share.gather({
+    sess = fakeSession, lastRequest = "an unrelated request",
+    version = "1.2.0",
+  })
+  ok(runText:find("the last thing that RAN", 1, true) ~= nil,
+     "without a name it is still the last run")
+  ok(runText:find("boom", 1, true) ~= nil, "with its error")
+  ok(runText:find("from another job", 1, true) ~= nil, "and its output")
+  ok(runText:find("an unrelated request", 1, true) ~= nil, "and its request")
+  ok(runText:find("----- job -----", 1, true) == nil,
+     "and no job section at all")
+
   ok(share.redact("keep me", nil) == "keep me", "no rules changes nothing")
   local okPat = pcall(share.redact, "x", { "%(" })
   ok(okPat, "a malformed pattern warns rather than throwing")

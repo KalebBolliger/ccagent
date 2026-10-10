@@ -94,7 +94,7 @@ local HELP = {
   "/forget         wipe world memory and pose",
   "/stats          token usage this session",
   "/doctor         version, transport, one test call",
-  "/share          post the last run somewhere readable",
+  "/share [name]   post the last run, or a saved program, somewhere readable",
   "/update         pull the latest code, then reboot",
   "/exit",
 }
@@ -389,13 +389,44 @@ local function command(input, ctx)
       console.dim("and permanent")
     else
       local st = require("claude.client").settings(cfg)
-      local text = share.gather({
+      local gathered = {
         sess = sess, lastRequest = ctx.lastRequest,
         version = agent.VERSION, logFile = cfg.logFile,
         situation = agent.situation(),
         settings = ("%s %d tok effort %s"):format(st.model, st.maxTokens,
                                                   st.effort),
-      })
+      }
+
+      -- `/share <name>` sends a saved program instead of the last run,
+      -- because the program worth asking about is often not the one that
+      -- happened to run most recently.
+      local name = util.trim(rest or "")
+      if name ~= "" then
+        local src, lerr = jobs.load(name)
+        if not src then
+          console.err(tostring(lerr))
+          console.dim("/jobs lists what is saved")
+          return true
+        end
+        local facts = {}
+        local state = agent.lib.state(name) or {}
+        facts[#facts + 1] = state.registered
+          and (state.listed and "registered, listed in the prompt"
+                             or "registered, not listed")
+          or "saved only, not registered"
+        if state.frame then facts[#facts + 1] = "frame: " .. tostring(state.frame) end
+        local chk = jobs.check(name)
+        if chk and #(chk.findings or {}) > 0 then
+          facts[#facts + 1] = "lint:\n" .. agent.lint.report(chk.findings)
+        end
+        for _, e in ipairs(chk and chk.errors or {}) do
+          facts[#facts + 1] = "contract error: " .. tostring(e)
+        end
+        gathered.job  = { name = name, facts = facts }
+        gathered.code = src
+      end
+
+      local text = share.gather(gathered)
       if share.carriesSecret(text, cfg.apiKey) then
         console.err("report contains the api key; not sent")
         return true

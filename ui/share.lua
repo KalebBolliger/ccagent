@@ -73,6 +73,15 @@ function share.bundle(parts)
     out[#out + 1] = rule("program") .. tostring(parts.code)
   end
 
+  -- A saved program's own header already carries its name, save date and
+  -- the request that produced it, so this adds only what the file cannot
+  -- say about itself: whether it is registered, and what the lint thinks.
+  if parts.job then
+    local lines = { "name: " .. tostring(parts.job.name) }
+    for _, f in ipairs(parts.job.facts or {}) do lines[#lines + 1] = f end
+    out[#out + 1] = rule("job") .. table.concat(lines, "\n")
+  end
+
   local r = parts.result
   if r then
     local head = r.ok and "ok" or ("failed: " .. tostring(r.error or "?"))
@@ -97,16 +106,24 @@ end
 
 --- Collect a bundle from the live session. Kept apart from bundle() so
 --- the formatting can be tested without a turtle.
+---
+--- With ctx.job set it describes that saved program instead of the last
+--- run. The session's result is then deliberately dropped: that output
+--- belongs to whatever ran most recently, which is usually some other
+--- program, and a report pairing one program's source with another's
+--- output is worse than one carrying no output at all.
 function share.gather(ctx)
   ctx = ctx or {}
   local sess = ctx.sess
+  local sharingJob = ctx.job ~= nil
   return share.bundle({
     version   = ctx.version,
     settings  = ctx.settings,
     situation = ctx.situation,
-    request   = ctx.lastRequest,
-    code      = sess and sess.lastCode,
-    result    = sess and sess.lastResult,
+    job       = ctx.job,
+    request   = not sharingJob and ctx.lastRequest or nil,
+    code      = ctx.code or (not sharingJob and sess and sess.lastCode) or nil,
+    result    = not sharingJob and sess and sess.lastResult or nil,
     log       = tailFile(ctx.logFile, share.logLines),
   })
 end

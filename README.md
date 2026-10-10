@@ -322,7 +322,7 @@ Anything that is not a slash command is a request.
 | `/model [id]` | show or change the model |
 | `/stats` | token usage, including cache hits |
 | `/doctor` | version, transport settings, and one live test request |
-| `/share` | post the last run somewhere you can read it |
+| `/share [name]` | post the last run — or a saved program — somewhere you can read it |
 | `/update` | pull the latest code and reboot |
 
 Press **Q** while a job runs to ask it to stop at the next checkpoint; press it
@@ -521,6 +521,13 @@ slow and drops exactly the detail that mattered.
 the tail of `/.ccagent/log.txt`), posts it to a sink you configure, and
 prints the link it answers with.
 
+`/share <name>` sends a saved program instead, with its registration state
+and lint findings — useful when the program worth asking about is not the
+one that happened to run most recently. It deliberately omits the last
+run's output: that belongs to whatever ran last, usually something else,
+and a report pairing one program's source with another's result is worse
+than one carrying no result at all.
+
 It defaults to `https://paste.rs`, whose server software reaps uploads
 after a configurable age — 30 days out of the box. **That is the
 operator's setting, not a promise to you**: there is no per-paste expiry
@@ -622,7 +629,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 605
+`lua5.3 test/all.lua` runs the three suites against a mock world — 617
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
