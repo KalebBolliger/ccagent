@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-726 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+730 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -52,10 +52,28 @@ is CC:Tweaked's bundled Lua (Cobalt — roughly 5.1, with some later
 backports), which is stricter on the things people don't expect: no
 `table.unpack` (there's a shim, `util.unpack = table.unpack or unpack` —
 use it, don't add a second one), no `//`, no bitwise operators, no `goto`
-in older builds, no `utf8` library. Passing `test/all.lua` does not by
-itself prove new code will run in-game if it leans on a 5.2/5.3-only
-feature. When in doubt, write it the way the rest of the codebase already
-does — nothing here currently relies on anything past 5.1.
+in older builds, no `utf8` library. When in doubt, write it the way the
+rest of the codebase already does — nothing here currently relies on
+anything past 5.1.
+
+Two narrow checks now stand behind that, and it is worth knowing why they
+are narrow. **Running the suite under `lua5.1` does not work and is not a
+missing feature.** Cobalt is 5.1 *plus* backports, so plain 5.1 is
+stricter than the target in exactly the place this codebase lives: it
+rejects `load(src, name, "t", env)`, the four-argument form the sandbox
+depends on, while CC:Tweaked's own rom uses that form throughout and
+contains no `setfenv` at all. A check that fails on code the game runs
+happily is a check that gets ignored. So instead:
+
+- `luac5.1 -p` over every tracked file, in CI — the closest available
+  parser to Cobalt's grammar, which catches `//`, bitwise operators and
+  `goto` while only rejecting what Cobalt also rejects.
+- a library-surface check in `test/run_install.lua` — `table.unpack` and
+  `utf8` in anything listed in `manifest.txt`, with comments and strings
+  blanked by `lint.strip` first so prose about the trap is not the trap.
+
+Neither proves a change runs in-game. They close the two gaps that are
+mechanically closable.
 
 ## Map
 

@@ -165,6 +165,69 @@ ok(launcher and launcher:find("update", 1, true) ~= nil,
    "the launcher knows `ccagent update`")
 
 --------------------------------------------------------------------------
+group("nothing that ships reaches for a feature Cobalt lacks")
+do
+  -- The deployment target is CC:Tweaked's Cobalt, roughly 5.1, and the
+  -- tests run under lua5.3 for convenience -- so a 5.2/5.3-only feature
+  -- passes every suite and fails on a turtle. CLAUDE.md has said so from
+  -- the start and nothing checked it.
+  --
+  -- Why this is a grep over shipped files and not a run under lua5.1:
+  -- Cobalt is 5.1 PLUS backports, so a plain 5.1 is stricter than the
+  -- real target in ways that matter. It rejects load(src, name, "t", env)
+  -- -- the four-argument form the sandbox depends on -- while
+  -- CC:Tweaked's own rom uses that form throughout and contains no
+  -- setfenv at all. An interpreter that fails on code the game runs
+  -- happily is a check that would have to be ignored, and a check that
+  -- gets ignored is worse than none.
+  --
+  -- Syntax-level differences (// , bitwise operators, goto) are caught by
+  -- the luac5.1 parse sweep in CI, which errs in the same stricter
+  -- direction but only ever rejects things Cobalt also rejects today.
+  -- What is left is library surface, which is what this checks.
+  local lint = require("agent.lint")
+  local ABSENT = {
+    { pattern = "table%.unpack", name = "table.unpack",
+      -- The one legitimate mention is the documented shim itself.
+      allow = "or unpack", fix = "use util.unpack" },
+    { pattern = "utf8%.", name = "utf8", fix = "no utf8 library in Cobalt" },
+  }
+  local offenders = {}
+  for _, path in ipairs(manifest) do
+    local src = slurp(path)
+    if src then
+      -- Comments and string literals blanked first, so a doc comment
+      -- explaining the trap is not itself the trap.
+      local code = lint.strip(src)
+      for _, want in ipairs(ABSENT) do
+        for line in code:gmatch("[^\n]+") do
+          if line:find(want.pattern) and
+             not (want.allow and line:find(want.allow, 1, true)) then
+            offenders[#offenders + 1] = ("%s: %s (%s)")
+              :format(path, want.name, want.fix)
+          end
+        end
+      end
+    end
+  end
+  ok(#offenders == 0, "no shipped file uses a 5.2+ library feature",
+     table.concat(offenders, "; "))
+
+  -- The check must see a real one. util.lua's shim is the allowed case
+  -- and has to stay allowed; anything else is a finding.
+  local shim = "util.unpack = table.unpack or unpack"
+  ok(lint.strip(shim):find("table%.unpack") ~= nil
+     and shim:find("or unpack", 1, true) ~= nil,
+     "the documented shim is the allowed mention")
+  local bad = "local a = table.unpack(t)"
+  ok(lint.strip(bad):find("table%.unpack") ~= nil
+     and bad:find("or unpack", 1, true) == nil,
+     "and a bare use is not")
+  ok(lint.strip('-- table.unpack exists under 5.3'):find("table%.unpack") == nil,
+     "while prose about it in a comment is invisible to the check")
+end
+
+--------------------------------------------------------------------------
 group("install.lua -- the bootstrapper")
 
 local BOOT = assert(loadfile("install.lua"))

@@ -681,7 +681,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 726
+`lua5.3 test/all.lua` runs the three suites against a mock world — 730
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
@@ -693,6 +693,12 @@ catch a wrong belief about what CC:Tweaked or Minecraft does, because
 `test/mock.lua` encodes the same belief — several bugs have shipped with a
 passing test that agreed with them. `CLAUDE.md` explains the loop that
 works when the game and the tests disagree.
+
+GitHub Actions runs the suite on every push, parses every tracked file under
+both `luac5.3` and `luac5.1` — the closest available parser to the Cobalt
+grammar the turtle actually runs — and greps the history for anything
+`CLAUDE.md` forbids committing. Running the whole *suite* under `lua5.1`
+deliberately is not attempted; `CLAUDE.md` says why.
 
 ### A program is checked before it is allowed to move
 

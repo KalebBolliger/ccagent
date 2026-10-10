@@ -8,19 +8,29 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
-- CI runs the suite under lua5.1 as well as 5.3, parses every tracked
-  `.lua` file, and greps the history for the things `CLAUDE.md` forbids
-  committing. The 5.1 run is the one that matters: the deployment target
-  is Cobalt, roughly 5.1, and until now nothing checked that a change had
-  not reached for a 5.2/5.3-only feature. The whole suite already passed
-  under 5.1 unchanged. 5.1 is stricter than Cobalt, which backports some
-  later features, so a 5.1-only failure wants reading against the
-  CC:Tweaked source rather than obeying.
+- CI parses every tracked `.lua` file under both `luac5.3` and `luac5.1`,
+  runs the suite, and greps the history for the things `CLAUDE.md`
+  forbids committing.
 
   The parse sweep exists because the suite only loads what it requires:
   both front ends, `ui/net`, the bootstrapper and the shipped config are
   required by no test, so a syntax error in any of them passed the suite
-  and failed on a turtle.
+  and failed on a turtle. Running it under 5.1 as well is what catches
+  `//`, a bitwise operator or a `goto` before a turtle does.
+
+- A library-surface check for the deployment target, in
+  `test/run_install.lua`: nothing listed in `manifest.txt` may use
+  `table.unpack` (the documented `util.unpack` shim excepted) or `utf8`.
+  Comments and string literals are blanked with `lint.strip` first, so a
+  doc comment explaining the trap is not itself a finding.
+
+  This replaces running the whole suite under `lua5.1`, which was tried
+  first and does not work: Cobalt is 5.1 *plus* backports, so plain 5.1
+  is stricter than the real target in precisely the place this codebase
+  lives. It rejects `load(src, name, "t", env)` -- the four-argument form
+  the sandbox depends on -- while CC:Tweaked's own rom uses that form
+  throughout and contains no `setfenv` at all. A job that fails on code
+  the game runs happily is a job that gets ignored.
 
 - `/update <ref>` pulls a branch, and `ui/origin.lua` reads back the ref
   `install.lua` stored so the machine can say which copy of the library
@@ -86,6 +96,13 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   forgotten.
 
 **Fixed**
+
+- `test/all.lua` ran its child suites under a hardcoded `lua5.3`, so
+  `lua5.1 test/all.lua` reported on 5.3 and said nothing about 5.1 -- a
+  check answering about an interpreter nobody asked it about. It now uses
+  the interpreter it was launched with (`arg[-1]`). This is what exposed
+  the 5.1 question above: the suite had appeared to pass under 5.1 and
+  had never run under it.
 
 - `lint.globals` reported a global the program itself assigns as a name
   that is not in the sandbox. `placed = 0` was skipped as a binding
