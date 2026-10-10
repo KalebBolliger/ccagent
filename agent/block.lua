@@ -268,7 +268,8 @@ function block.place(dir, spec, opts)
   local api, target, restore, err = orient(dir)
   if not api then return false, err end
 
-  if api.detect() then
+  local occupied = api.detect()
+  if occupied then
     if not opts.replace then
       -- We are looking right at it, so correct the memory rather than
       -- leaving whatever stale belief sent us here.
@@ -279,7 +280,19 @@ function block.place(dir, spec, opts)
       if restore then restore() end
       return false, "space is occupied"
     end
-    api.dig()
+    -- Ignoring this is how 17 identical "Cannot place block here" lines
+    -- happen: a turtle with no digging tool cannot clear the space, the
+    -- refusal is swallowed, and the place that follows fails into a
+    -- block that is still there. Report the real reason, and the remedy
+    -- when the tool is sitting in the inventory.
+    local dug, digWhy = api.dig()
+    if not dug then
+      if restore then restore() end
+      local carried = caps.carriedFix("digging")
+      return false, ("cannot replace what is there: %s%s"):format(
+        tostring(digWhy or "dig failed"),
+        carried and (" (" .. carried .. ")") or "")
+    end
   end
 
   local ok, why = api.place(opts.text)
@@ -291,7 +304,18 @@ function block.place(dir, spec, opts)
     end
   end
   if restore then restore() end
-  if not ok then return false, why or "could not place" end
+  if not ok then
+    -- Nothing was detected and the game still said no. detect() only
+    -- sees blocks, so the usual causes are an entity standing in the
+    -- space or a block that needs support it has not got. Say that
+    -- rather than passing on a message that explains neither.
+    if not occupied then
+      return false, ("%s -- nothing is there, so something unblocklike is "
+                  .. "(a mob in the way, or a block needing support)")
+                  :format(tostring(why or "could not place"))
+    end
+    return false, why or "could not place"
+  end
   return true
 end
 

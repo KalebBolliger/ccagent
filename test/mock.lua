@@ -209,6 +209,10 @@ function turtle.digDown() return dig("down") end
 local function place(dir)
   local s = T.slots[T.sel]
   if not s or s.count <= 0 then return false, "No items to place" end
+  -- FIXTURE: the game refusing although detect() sees nothing. Real
+  -- causes are an entity in the space or a block wanting support, and
+  -- neither is modelled here -- only the refusal a caller has to handle.
+  if T.refusePlace then return false, "Cannot place block here" end
   local x, y, z = posFor(dir)
   if W[key(x, y, z)] then return false, "Cannot place block here" end
   W[key(x, y, z)] = s.name
@@ -846,6 +850,7 @@ function mock.reset()
   mock.dropped = 0
   mock.crafted = 0
   T.unlimitedFuel = nil
+  T.refusePlace = nil
   for k in pairs(mock.ground or {}) do mock.ground[k] = nil end
   mock.upgrades = { "pickaxe", "axe", "shovel", "hoe", "sword",
                     "modem", "crafting_table" }

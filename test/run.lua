@@ -1268,6 +1268,62 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("place: say why, not just that it failed")
+fresh()
+do
+  -- replace = true on a turtle with no digging tool. The dig refusal used
+  -- to be discarded and the place that followed reported CC's generic
+  -- "Cannot place block here" -- seventeen times in a row, for a mural,
+  -- with the pickaxe sitting in slot 1 the whole time.
+  mock.turtle.hasTool = false
+  mock.turtle.equipped = nil
+  mock.turtle.slots[1] = { name = "minecraft:brown_wool", count = 64 }
+  mock.turtle.slots[2] = { name = "minecraft:diamond_pickaxe", count = 1 }
+  inv.invalidate()
+  caps.refresh()
+  mock.set(0, 64, -1, "minecraft:sand")
+
+  local okP, why = block.place("forward", "minecraft:brown_wool",
+                               { replace = true })
+  ok(not okP, "replacing without a tool fails")
+  ok(tostring(why):find("cannot replace", 1, true) ~= nil,
+     "and says that is what failed, not that placing did", why)
+  ok(tostring(why):find("slot 2", 1, true) ~= nil,
+     "naming where the tool it needs is sitting", why)
+  ok(tostring(why):find("inv.equip", 1, true) ~= nil,
+     "and what to call", why)
+  ok(mock.get(0, 64, -1) == "minecraft:sand", "the sand is untouched")
+
+  -- With a tool it goes through, so the guard is about capability and
+  -- not about replace being refused on principle.
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:brown_wool", count = 64 }
+  inv.invalidate()
+  caps.refresh()
+  mock.set(0, 64, -1, "minecraft:sand")
+  ok(block.place("forward", "minecraft:brown_wool", { replace = true }),
+     "a turtle that can dig replaces as before")
+  ok(mock.get(0, 64, -1) == "minecraft:brown_wool", "and the block changed")
+
+  -- Nothing detected, and the game still refuses. detect() only sees
+  -- blocks, so that means something unblocklike -- a mob standing in the
+  -- space, most often, which is what put a gap in a wool mural.
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:brown_wool", count = 64 }
+  inv.invalidate()
+  local realPlace = mock.turtle.refusePlace
+  mock.turtle.refusePlace = true
+  local okM, whyM = block.place("forward", "minecraft:brown_wool")
+  ok(not okM, "a refused place into empty space fails")
+  ok(tostring(whyM):find("nothing is there", 1, true) ~= nil,
+     "and says the space looked empty", whyM)
+  ok(tostring(whyM):find("mob", 1, true) ~= nil,
+     "pointing at what detect cannot see", whyM)
+  mock.turtle.refusePlace = realPlace
+end
+
+fresh()
+--------------------------------------------------------------------------
 group("a sleeping program must see what the operator did")
 fresh()
 do

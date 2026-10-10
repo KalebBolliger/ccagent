@@ -8,6 +8,27 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- `block.place(dir, spec, { replace = true })` threw away the result of
+  the dig it does first. A turtle with no digging tool cannot clear the
+  space, that refusal was discarded, and the place that followed failed
+  into a block still sitting there — reported as CC's generic "Cannot
+  place block here". A wool mural produced seventeen of those in a row
+  with the pickaxe in slot 1 the whole time.
+
+  It now returns what actually failed, and appends `caps.carriedFix`'s
+  answer when the tool is aboard: *cannot replace what is there: No tool
+  to dig with (diamond_pickaxe is in slot 2 but not equipped --
+  inv.equip("*pickaxe"))*.
+
+- A place refused where nothing was detected now says so. `detect` only
+  sees blocks, so a refusal over apparently empty space means something
+  unblocklike is in the way — an entity, usually, or a block wanting
+  support it has not got. That is what leaves a gap in a mural where a
+  wandering trader is standing, and the old message explained neither.
+
+
+**Fixed**
+
 - A program asked to wait for materials could never notice them arriving.
   `inv` caches and only this library's own operations clear it, so a loop
   polling `inv.count` between `job.sleep` calls read one snapshot for as
