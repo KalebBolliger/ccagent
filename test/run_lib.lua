@@ -202,6 +202,66 @@ job.report({ back = geom.eq(here, args.origin) })
      "a drift check reads position without anchoring to it")
 end
 
+group("lint: why the advisory findings are not shown for a one-off")
+fresh()
+do
+  local executor = require("claude.executor")
+  local names  = executor.globalNames(agent.env())
+  local tables = executor.globalTables(agent.env())
+  local function kinds(src)
+    local out = {}
+    for _, f in ipairs(lint.check(src, names, tables)) do out[f.kind] = true end
+    return out
+  end
+
+  -- This group exists to stop a plausible-looking feature being built on
+  -- a check that cannot support it. The plan was to show the operator
+  -- lint findings on a freshly generated program and offer to send it
+  -- back for a fix. The three findings below are the only advisory ones
+  -- there are, and every one fires on a CORRECT one-off -- because all
+  -- three are judgements about whether a saved routine's declared
+  -- `frame:` matches its source, and a one-off declares no frame.
+  --
+  -- Shown to an operator they would warn on nearly every program, which
+  -- is the fastest way to teach someone to dismiss warnings. If a future
+  -- change makes one of these discriminating, these assertions fail and
+  -- the question is worth reopening.
+
+  -- Anchoring to nav.pos() is what a one-off IS.
+  local correct1 = [[
+local p = nav.pos()
+block.fill(p, geom.add(p, {x=2,y=0,z=2}), "minecraft:cobblestone")
+job.report(1)
+]]
+  ok(kinds(correct1)["ambient-anchor"] == true,
+     "ambient-anchor fires on a correct one-off")
+
+  -- A literal coordinate is correct when the operator gave one.
+  ok(kinds('nav.moveTo({x=104, y=64, z=-31})\n')["absolute-coords"] == true,
+     "absolute-coords fires when the operator supplied the coordinates")
+
+  -- The decisive one. These two programs are a bug and a correct loop,
+  -- and the finding is the same kind with the same wording on both, so
+  -- it says nothing about which is which.
+  local muralBug = [[
+for col = 1, 9 do
+  block.place("forward", "minecraft:green_wool")
+  nav.step("right")
+end
+]]
+  local fine = [[
+for i = 1, 5 do
+  block.dig("forward")
+  nav.step("forward")
+  job.checkAbort()
+end
+]]
+  ok(kinds(muralBug)["relative-facing"] == true, "relative-facing fires on the bug")
+  ok(kinds(fine)["relative-facing"] == true,
+     "and identically on a correct loop -- which is why it cannot be a warning")
+end
+
+--------------------------------------------------------------------------
 group("lint: a field that is not on a namespace that is")
 fresh()
 do

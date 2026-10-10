@@ -63,6 +63,28 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   whose sandbox, are not the host's to describe -- a fleet gets no gate
   rather than a gate answering about the wrong machine.
 
+**Not added, with the reason recorded**
+
+- Operator-facing lint warnings on a freshly generated program, with an
+  optional capped auto-retry. The plan was to show the findings and offer
+  to send the program back; measuring first showed there is nothing worth
+  showing. `agent/lint.lua`'s three advisory findings all fire on correct
+  one-off programs, because all three judge whether a *saved routine's*
+  declared `frame:` matches its source and a one-off declares no frame:
+  `ambient-anchor` fires on any program that anchors to `nav.pos()`,
+  which is what a one-off is; `absolute-coords` fires when the operator
+  supplied the coordinates; and `relative-facing` fires on the mural bug
+  and on a correct `nav.step("forward")` loop with the same kind and the
+  same wording, so it does not distinguish them.
+
+  An earlier claim that the lint had flagged the mural before it ran was
+  true and worthless: it flags the correct version too. Warnings that
+  fire on nearly every program teach an operator to dismiss warnings, so
+  the tier stays unbuilt until there is a finding that discriminates. A
+  test now pins each of those three behaviours, so if one becomes
+  discriminating the suite says so instead of the question being
+  forgotten.
+
 **Fixed**
 
 - `lint.globals` reported a global the program itself assigns as a name
