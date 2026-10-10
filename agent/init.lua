@@ -181,6 +181,8 @@ registry.add("block", block, "look at, break, place and hit blocks in any direct
   { fn = "place",    sig = "(dir, spec?, opts?) -> ok, err", doc = "spec is an item spec; opts: replace, text" },
   { fn = "till",     sig = "(dir, opts?) -> ok, err, info",  doc = "hoe the ground into farmland (or shovel a path). Down only works with AIR below you -- hover two above the ground, never stand on it. NOT place: place puts down an inventory item and never uses the equipped tool" },
   { fn = "fill",     sig = "(a, b, spec, opts?) -> placed, skipped, info", doc = "fill a box; checks each cell rather than trusting memory; info explains anything not placed" },
+  { fn = "pattern",  sig = "(rows, opts?) -> placed, skipped, info",
+    doc = "build 2D pixel art as an upright wall -- use for ANY shape, picture, letter or logo instead of walking rows. rows is strings, ROW 1 IS THE TOP; opts.map is char->spec; space or unmapped char = leave empty. opts.origin is the BOTTOM-LEFT pixel, default the block in front, so murals grow up and right; opts.facing aims it" },
   { fn = "clear",    sig = "(a, b, opts?) -> dug, info",    doc = "excavate a box; info explains anything not dug" },
   { fn = "attack",   sig = "(dir, opts?) -> hits",          doc = "opts: times, delay" },
   { fn = "drop",     sig = "(dir, spec, opts?) -> n",       doc = "drop matching items that way" },

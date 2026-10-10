@@ -436,14 +436,31 @@ function block.settle(info)
   return info
 end
 
-function block.fill(cornerA, cornerB, spec, opts)
+--- The body shared by fill and pattern: walk cells, place what each one
+--- asks for, and account for whatever did not happen.
+---
+--- `nextCell` is an iterator yielding (position, spec). A nil spec means
+--- leave that cell alone, which is how a pattern expresses a hole.
+local function placeCells(nextCell, opts)
   opts = opts or {}
   local placed, skipped = 0, 0
   local info = { cells = 0, unreachable = 0, unplaceable = 0 }
   local consecutive = 0
   local limit = opts.giveUpAfter or 3
 
-  for cell in geom.iterBox(cornerA, cornerB, { topDown = opts.topDown }) do
+  -- Holes are dropped here rather than inside the loop, so a cell the
+  -- caller never asked for is not a cell at all: not placed, not
+  -- skipped, not counted. "placed 12 of 20" on a design with eight
+  -- deliberate gaps in it reads as a job that went wrong.
+  local function wanted()
+    while true do
+      local cell, spec = nextCell()
+      if cell == nil then return nil end
+      if spec ~= nil then return cell, spec end
+    end
+  end
+
+  for cell, spec in wanted do
     info.cells = info.cells + 1
     if opts.limit and placed >= opts.limit then break end
     -- Skipping on memory is how a wall ends up with a hole in it. An
@@ -499,6 +516,140 @@ function block.fill(cornerA, cornerB, spec, opts)
     end
   end
   return placed, skipped, block.settle(info)
+end
+
+--- Build a 2D pattern as an upright mural.
+---
+--- This exists because every attempt to build one by hand got the
+--- geometry wrong in a different way. A turtle has no sideways move, so
+--- a hand-rolled row scanner that steps right and places "forward"
+--- changes what "forward" means on its first step and walks a square;
+--- and a mural anchored at the turtle and grown downward goes straight
+--- into the ground. Both are invisible until you look at the world.
+--- Here the cells are computed as coordinates and reached with
+--- nav.moveTo, so facing is never load-bearing.
+---
+---   rows   array of strings (with opts.map) or arrays of item specs.
+---          ROW 1 IS THE TOP, the way pixel art is written. A space, or
+---          a character absent from the map, leaves that cell alone.
+---   opts.map     character -> item spec, for string rows
+---   opts.origin  world position of the BOTTOM-LEFT cell, as seen by a
+---                turtle facing the mural. Defaults to the block in
+---                front of the turtle, so a mural grows up and to the
+---                right from where you are standing and never descends
+---                into the floor.
+---   opts.facing  which way the mural is looked at; defaults to current
+---   plus everything block.fill takes: dig, replace, giveUpAfter, limit,
+---   strict, trustMemory, onCell
+---
+--- Returns placed, skipped, info -- the same contract as block.fill,
+--- with info.ragged set when the rows were not all the same length.
+function block.pattern(rows, opts)
+  opts = opts or {}
+
+  -- Nothing was built and the caller has to hear why from the same field
+  -- it would read after a real run. settle() would say complete = true
+  -- here, because no cell failed -- no cell was ever tried. A report of
+  -- "done" carrying a reason is how a mural that never existed gets
+  -- announced as finished.
+  local function fault(reason)
+    local info = block.settle({ cells = 0, unreachable = 0, unplaceable = 0,
+                                reason = reason })
+    info.complete = false
+    return 0, 0, info
+  end
+
+  if type(rows) ~= "table" or #rows == 0 then
+    return fault("empty pattern -- no rows to build")
+  end
+
+  local facing = nav.facing() or 0
+  if opts.facing then
+    local _, f = geom.resolve(opts.facing, facing)
+    if not f then
+      return fault("unknown facing " .. tostring(opts.facing))
+    end
+    facing = f
+  end
+
+  local pos = nav.pos()
+  if not pos then
+    return fault("position not initialised")
+  end
+  local origin = opts.origin or geom.ahead(pos, facing, 1)
+
+  -- Column 1 is the leftmost cell as seen by someone facing the mural,
+  -- so columns advance to that viewer's right.
+  local right = geom.FACING_DELTA[(facing + 1) % 4]
+
+  local function cellSpec(r, c)
+    local row = rows[r]
+    if type(row) == "string" then
+      local ch = row:sub(c, c)
+      if ch == "" or ch == " " then return nil end
+      return opts.map and opts.map[ch] or nil
+    elseif type(row) == "table" then
+      -- false, not just nil: a generated grid writes its holes as false
+      -- because a nil in the middle of an array makes # ambiguous. Both
+      -- mean "leave this cell alone", and a false reaching block.place
+      -- would be counted as a cell that could not be built.
+      local spec = row[c]
+      if spec == false then return nil end
+      return spec
+    end
+    return nil
+  end
+
+  local width, ragged = 0, false
+  for _, row in ipairs(rows) do
+    local n = #row                    -- strings and arrays both answer #
+    if width ~= 0 and n ~= width then ragged = true end
+    if n > width then width = n end
+  end
+
+  -- Bottom row first: the turtle stands in front of each cell, and
+  -- working upward keeps it out of the way of what it has just built.
+  local r, c = #rows, 0
+  local function nextCell()
+    while r >= 1 do
+      c = c + 1
+      if c > width then c, r = 0, r - 1
+      else
+        local cell = {
+          x = origin.x + right.x * (c - 1),
+          y = origin.y + (#rows - r),
+          z = origin.z + right.z * (c - 1),
+        }
+        return cell, cellSpec(r, c)
+      end
+    end
+    return nil
+  end
+
+  local placed, skipped, info = placeCells(nextCell, opts)
+  if type(info) == "table" then
+    info.width, info.rows = width, #rows
+    -- A grid whose rows are different lengths is nearly always a typo in
+    -- the art rather than an intention, and silently padding it shifts
+    -- every pixel after the short row. Say so instead.
+    if ragged then
+      info.ragged = true
+      info.complete = false
+      info.reason = info.reason or
+        "rows are not all the same length; short rows were left unfilled"
+    end
+  end
+  return placed, skipped, info
+end
+
+function block.fill(cornerA, cornerB, spec, opts)
+  opts = opts or {}
+  local it = geom.iterBox(cornerA, cornerB, { topDown = opts.topDown })
+  return placeCells(function()
+    local cell = it()
+    if cell == nil then return nil end
+    return cell, spec
+  end, opts)
 end
 
 --- Clear a box of blocks. The quarry/excavation primitive.

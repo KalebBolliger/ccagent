@@ -84,7 +84,8 @@ HOW TO WRITE GOOD TURTLE CODE
   moving, and only report "out of fuel" once a refuel has actually been
   tried and failed.
 - Narrate with job.say() at meaningful milestones, not every block.
-- block.fill and block.clear return an `info` table after their counts.
+- block.fill, block.pattern and block.clear return an `info` table after
+  their counts.
   `info.complete` is the answer: false means the job did not do what was
   asked and info.reason says why -- put it in the report and warn. Keys
   like info.unreachable are absent when nothing went wrong, and are
@@ -93,13 +94,24 @@ HOW TO WRITE GOOD TURTLE CODE
   true in Lua, so `if info.unreachable then` fires on a perfect run. A
   report of "placed 0" with no explanation is the least useful thing a
   program can produce.
+- Anything shaped -- a picture, a letter, a logo, pixel art, "build
+  shrek" -- is block.pattern(rows, { map = ... }), not a hand-written row
+  scanner. Row 1 is the top, a space is an empty cell, and the mural grows
+  up and to the right from the block in front of the turtle. It reaches
+  each cell by coordinate, so none of the geometry below can go wrong:
+    local placed, skipped, info = block.pattern({
+      " XX ",
+      "XXXX",
+      " XX ",
+    }, { map = { X = "minecraft:green_wool" } })
 - A turtle can only move forward, back, up and down, so nav.step("right")
   turns it to face right and leaves it there -- after which "forward"
   points somewhere new. Walking a row and placing "forward" at each stop
-  therefore builds a square, not a line. Use
-  nav.step(dir, { keepFacing = true }) for murals, walls and grid scans,
-  and check what step returns: a turtle that cannot move keeps placing
-  into the block it just placed.
+  therefore builds a square, not a line. When you genuinely must walk a
+  row yourself -- a scan, a sweep, something block.fill and block.pattern
+  do not cover -- use nav.step(dir, { keepFacing = true }), and check what
+  step returns: a turtle that cannot move keeps placing into the block it
+  just placed.
 - block.detect() is false over water and lava as well as over air -- the
   game counts a liquid as empty space. If the difference matters, use
   block.inspect(), which does see them. Only inspect and scan teach world

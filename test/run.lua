@@ -1890,5 +1890,135 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("a mural is a grid of coordinates, not a walk")
+
+-- Three attempts at "build shrek" failed three different ways, all of
+-- them geometry: a row scanner that steps right and places "forward"
+-- redefines forward on its first step and lays a square; a mural
+-- anchored at the turtle and grown downward builds into the floor. None
+-- of it shows up in the program's own output -- it reports success. So
+-- block.pattern computes every cell as a coordinate and reaches it with
+-- nav.moveTo, and these tests check the world afterwards rather than the
+-- return values.
+local function wool(n)
+  fresh()
+  mock.turtle.slots[1] = { name = "minecraft:white_wool", count = n or 64 }
+  inv.invalidate()
+  mock.turtle.unlimitedFuel = true
+end
+
+-- One row, three wide: a LINE along x, not a square. This is the exact
+-- shape the hand-rolled scanner got wrong.
+wool()
+local placed, skipped, info = block.pattern({ "XXX" },
+  { map = { X = "minecraft:white_wool" } })
+ok(placed == 3, "a one-row pattern places one block per column", placed)
+ok(mock.get(0, 64, -1) == "minecraft:white_wool" and
+   mock.get(1, 64, -1) == "minecraft:white_wool" and
+   mock.get(2, 64, -1) == "minecraft:white_wool",
+   "in a straight line to the viewer's right",
+   table.concat({ tostring(mock.get(0,64,-1)), tostring(mock.get(1,64,-1)),
+                  tostring(mock.get(2,64,-1)) }, ","))
+ok(mock.get(0, 64, -2) == nil and mock.get(1, 64, -2) == nil,
+   "with nothing laid in the direction a turning scanner would drift")
+ok(info.complete == true, "and the run says it finished", tostring(info.reason))
+
+-- Row 1 is the TOP, and the mural grows UP from the block in front --
+-- never down into the ground the turtle is standing on.
+wool()
+mock.turtle.slots[2] = { name = "minecraft:stone", count = 64 }
+inv.invalidate()
+placed = block.pattern({ "T", "B" }, { map = { T = "minecraft:white_wool",
+                                               B = "minecraft:stone" } })
+ok(placed == 2, "two rows, two blocks", placed)
+ok(mock.get(0, 65, -1) == "minecraft:white_wool", "row 1 is the top",
+   tostring(mock.get(0, 65, -1)))
+ok(mock.get(0, 64, -1) == "minecraft:stone", "the last row sits at eye level",
+   tostring(mock.get(0, 64, -1)))
+ok(mock.get(0, 63, -1) == nil, "nothing is built below the turtle")
+
+-- A space is a hole the caller asked for: neither placed, nor skipped,
+-- nor counted as a cell. "placed 2 of 3" on a design with a gap in it
+-- reads as a failure.
+wool()
+placed, skipped, info = block.pattern({ "X X" },
+  { map = { X = "minecraft:white_wool" } })
+ok(placed == 2 and skipped == 0, "a space places nothing and skips nothing",
+   placed .. "/" .. skipped)
+ok(mock.get(1, 64, -1) == nil, "leaving the cell alone")
+ok(info.cells == 2, "and is not counted among the cells asked for", info.cells)
+ok(info.complete == true, "so a design with a gap still reports complete",
+   tostring(info.reason))
+
+-- A character with no entry in the map is a hole too, not a crash and
+-- not a guess at what the operator meant.
+wool()
+placed = block.pattern({ "XZX" }, { map = { X = "minecraft:white_wool" } })
+ok(placed == 2, "an unmapped character leaves its cell empty", placed)
+ok(mock.get(1, 64, -1) == nil, "with no block invented for it")
+
+-- Rows of specs, for art that is generated rather than typed.
+wool()
+placed, skipped, info = block.pattern(
+  { { "minecraft:white_wool", false },
+    { "minecraft:white_wool", "minecraft:white_wool" } })
+ok(placed == 3, "rows may be arrays of specs", placed)
+-- A generated grid writes its holes as false, since a nil mid-array makes
+-- # ambiguous. A false that reached block.place would be counted as a
+-- cell that could not be built.
+ok(info.complete == true and info.cells == 3,
+   "and false is a hole, not a cell that failed",
+   tostring(info.complete) .. "/" .. tostring(info.cells))
+
+-- Ragged rows are a typo in the art far more often than an intention,
+-- and padding them silently shifts every pixel after the short row.
+wool()
+placed, skipped, info = block.pattern({ "XXX", "X" },
+  { map = { X = "minecraft:white_wool" } })
+ok(info.ragged == true, "rows of different lengths are reported")
+ok(info.complete == false, "and the run does not claim to have finished")
+ok(info.reason ~= nil, "with a reason the operator can read", tostring(info.reason))
+ok(placed == 4, "after building what the rows did say", placed)
+
+-- opts.origin aims it somewhere else entirely; the bottom-left cell is
+-- the anchor, so the caller can reason about one corner instead of four.
+wool()
+placed = block.pattern({ "XX" }, { map = { X = "minecraft:white_wool" },
+                                   origin = { x = 4, y = 70, z = -4 } })
+ok(placed == 2, "an explicit origin is honoured", placed)
+ok(mock.get(4, 70, -4) ~= nil and mock.get(5, 70, -4) ~= nil,
+   "as the bottom-left cell of the mural")
+
+-- The facing the mural is viewed from decides which way columns advance.
+-- Facing east, the viewer's right is south (+z).
+wool()
+placed = block.pattern({ "XX" }, { map = { X = "minecraft:white_wool" },
+                                   facing = "east" })
+ok(placed == 2, "opts.facing re-aims the mural", placed)
+ok(mock.get(1, 64, 0) ~= nil and mock.get(1, 64, 1) ~= nil,
+   "columns advance to that viewer's right",
+   tostring(mock.get(1,64,0)) .. "," .. tostring(mock.get(1,64,1)))
+
+-- An empty pattern is a no-op with an explanation, not an error.
+wool()
+placed, skipped, info = block.pattern({})
+ok(placed == 0 and info.complete == false and info.reason ~= nil,
+   "an empty pattern reports why it did nothing", tostring(info.reason))
+
+-- Registered, or the model cannot call it however well it is documented.
+-- The sandbox hands out the live module table, so a function added to
+-- agent/block.lua is callable whether or not anything declared it -- the
+-- manifest is the only thing that tells the model it exists, and nothing
+-- about block.lua itself would say it had been left out. Match the
+-- rendered line, not the bare word: "pattern" also appears in the docs
+-- for block.is and inv.craft, so a looser search passes with this
+-- capability unregistered.
+do
+  local man = agent.registry.manifest()
+  ok(man:find("block.pattern(", 1, true) ~= nil,
+     "block.pattern appears in the manifest the model reads")
+end
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

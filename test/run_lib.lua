@@ -784,6 +784,13 @@ do
   ok(prompt.RULES:find("moveTo", 1, true) ~= nil,
      "and what already handles it -- losing either means the rule went "
      .. "missing, whatever the wording")
+
+  -- Three hand-rolled murals in a row got the geometry wrong before
+  -- block.pattern existed. A capability the model is never told to reach
+  -- for is a capability it will not reach for, so the rule naming it is
+  -- as load-bearing as the function.
+  ok(prompt.RULES:find("block.pattern", 1, true) ~= nil,
+     "the rules point shaped builds at block.pattern")
 end
 
 --------------------------------------------------------------------------

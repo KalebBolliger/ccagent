@@ -6,6 +6,32 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Added**
+
+- `block.pattern(rows, opts)` builds a 2D picture as an upright wall:
+  `block.pattern({" XX ", "XXXX"}, { map = { X = "minecraft:green_wool" } })`.
+  Row 1 is the top, a space or an unmapped character leaves the cell
+  alone, and the default origin is the block in front of the turtle as
+  the bottom-left pixel, so a mural grows up and to the right.
+
+  This exists because "build shrek" failed three times and the geometry
+  was wrong in a different way each time — a row scanner that redefined
+  `"forward"` on its first sideways step and laid a square, a mural grown
+  downward into the floor, a program that reported success either way
+  because it was counting its own placements rather than looking. Those
+  are correctable by instruction, but three rounds of prompt guidance did
+  not correct them. A call that computes each cell as a coordinate and
+  reaches it with `nav.moveTo` makes facing structurally unable to
+  matter, which is a stronger guarantee than a rule in the prompt.
+
+  Ragged rows set `info.ragged` and `info.complete = false` instead of
+  being padded, because padding a short row shifts every pixel after it;
+  a cell left deliberately empty is counted as neither placed nor
+  skipped, so a design with a gap in it does not report "placed 12 of
+  20". `claude/prompt.lua` now sends any shaped build here, and the
+  `nav.step` rule it used to rely on is now about the cases
+  `block.fill`/`block.pattern` do not cover.
+
 **Fixed**
 
 - `block.place(dir, spec, { replace = true })` threw away the result of
@@ -25,9 +51,6 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   unblocklike is in the way — an entity, usually, or a block wanting
   support it has not got. That is what leaves a gap in a mural where a
   wandering trader is standing, and the old message explained neither.
-
-
-**Fixed**
 
 - A program asked to wait for materials could never notice them arriving.
   `inv` caches and only this library's own operations clear it, so a loop

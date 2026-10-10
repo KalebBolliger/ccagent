@@ -461,6 +461,7 @@ nav.moveTo({x=104,y=64,z=-31})        -- A*, obstacle memory, gravel, mobs, fuel
 block.digVein("*_ore", {max=64})      -- flood-fill a vein and come back
 block.clear(a, b, {dumpWhenFull=fn})  -- excavate a box
 block.fill(a, b, "*_planks")          -- build one
+block.pattern(rows, {map={X="wool"}})  -- pixel art as an upright wall
 inv.count({tag="minecraft:logs"})     -- tag- and glob-aware matching
 inv.craft({{"wheat","wheat","wheat"}}) -- equips a carried table, spreads surplus
 block.till("down")                    -- hoe the ground (hover two above it)
@@ -482,6 +483,36 @@ and are worth knowing about before you reimplement them badly:
   above it can be tilled, and the turtle is a block. Hover two above the
   floor — `block.till("down")` then `block.place("down", seeds)` both work
   from that one position, so a farm is a single pass.
+
+### A shape is a grid of coordinates, not a walk
+
+"Build shrek" failed three times, each time on geometry rather than on
+anything about shrek. A turtle has no sideways move, so a row scanner that
+steps right and places *forward* has redefined forward by its second block
+and lays a square; a mural anchored at the turtle and grown downward builds
+into the floor it is standing on. Neither shows up in the program's own
+output — it counts its placements and reports success.
+
+`block.pattern` takes the picture and works out the coordinates:
+
+```lua
+local placed, skipped, info = block.pattern({
+  " XXX ",
+  "XXXXX",
+  " X X ",
+}, { map = { X = "minecraft:green_wool" } })
+```
+
+Row 1 is the top, the way pixel art is written. A space — or a character
+with no entry in `map` — leaves that cell alone, and is counted as neither
+placed nor skipped, because a hole the caller asked for is not a failure.
+The default origin is the block in front of the turtle, treated as the
+*bottom-left* pixel, so a mural grows up and to the right from where you
+are standing; `opts.origin` and `opts.facing` aim it anywhere else. Every
+cell is reached with `nav.moveTo`, so facing is never load-bearing and the
+two failures above cannot happen. Rows of different lengths set
+`info.ragged` and `info.complete = false` rather than being padded, since
+padding a short row shifts every pixel after it.
 
 ### Crafting has a failure mode worth handling
 
@@ -629,7 +660,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 640
+`lua5.3 test/all.lua` runs the three suites against a mock world — 667
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
