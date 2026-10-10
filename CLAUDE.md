@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-692 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+722 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -228,6 +228,24 @@ Nothing should come back but `noreply@anthropic.com`.
   `turtle.getEquippedLeft/Right` cost one call and cannot be out of date.
   Keep the lists for *preference* (burn coal before planks) and let the
   game decide *membership*.
+- **A static check that refuses to run something needs its false
+  positives enumerated, and its ground truth asked rather than listed.**
+  `lint.globals` reported `placed = 0; placed = placed + 1` as a name not
+  in the sandbox -- the read on the right of the second line, since only
+  assignment *targets* were skipped. Harmless while the check only
+  printed advice at registration time; the moment anything gated on it,
+  it would have refused the most ordinary program in Lua. The companion
+  mistake is the allowed-name list: `agent/lib.lua` keeps one for
+  routines, and a list drifts from the sandbox silently in the direction
+  that matters, since a name the sandbox dropped stays "allowed". The
+  one-off gate therefore asks `claude/executor.lua` for the live surface
+  (`globalNames`/`globalTables`), which also means the answer is the one
+  the machine running the program would give -- `table.unpack` is present
+  under lua5.3 and absent under Cobalt. If you add a check that can stop
+  a program, write out each exemption and the real case behind it, the
+  way the `unknown-member` check does for `turtle` (its surface is
+  dynamic: `turtle.craft` appears only once a crafting table is
+  equipped).
 - A new file under `agent/`, `claude/` or `ui/` has to be added to
   `manifest.txt` as well, or turtles installed over the wire will not get
   it. `test/run_install.lua` catches this; `lua5.3 test/all.lua` is the only

@@ -37,7 +37,42 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   the source instead of changing the branch. A test now pins both halves
   of that ambiguity.
 
+- A generated program is checked against the sandbox before it is allowed
+  to move. Lua resolves a name when the line runs, so a call to a function
+  that was never written starts, works, changes the world and only then
+  dies -- which is how `inv.fuel()`, a call that does not exist and never
+  did, reached a real turtle with the answer sitting in the API listing in
+  its own system prompt.
+
+  Two kinds are refused: a bare name that is not in the sandbox, and a
+  field on a namespace that is (`inv.fuel`, `string.frmat`). Both are
+  facts rather than predictions -- the table is there and the key is in it
+  or not -- which is why they are grounds for not running something, and
+  why nothing else the lint reports is. One repair round is spent
+  (`staticRepairs`, default 1) carrying the specific missing names; a
+  program that comes back still naming them is not run at all. A clean
+  program costs no extra request.
+
+  The surface is asked of the live sandbox via `executor.globalNames` and
+  `executor.globalTables` rather than kept as a list, so the answer is the
+  one the machine running the program would give: `table.unpack` exists
+  under the lua5.3 the tests use and does not under Cobalt.
+
+  No such check in fleet mode. The host's agent proxy raises on `env()` by
+  design, because the program runs on a worker whose capabilities, and so
+  whose sandbox, are not the host's to describe -- a fleet gets no gate
+  rather than a gate answering about the wrong machine.
+
 **Fixed**
+
+- `lint.globals` reported a global the program itself assigns as a name
+  that is not in the sandbox. `placed = 0` was skipped as a binding
+  target and so was the left-hand `placed` on the next line, but the one
+  on the right is a read, and it was a finding. Harmless while the check
+  only printed advice at registration time; the moment the static gate
+  above began refusing programs on it, it would have refused a counter.
+  Assignment *order* is still not checked, and deliberately: deciding
+  that statically means knowing when each function runs.
 
 - `install.lua` read a failing status off the wrong return value.
   CC:Tweaked queues `http_success` only for 200..399 and otherwise calls

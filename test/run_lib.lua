@@ -168,6 +168,29 @@ block.dig("down")
   ok(u and u.detail:find("frobnicate"), "undefined global detected", u and u.detail)
   ok(not lint.report(f5):find("helper"), "a real sandbox name is not flagged")
 
+  -- A counter is the most ordinary thing in Lua, and it used to be a
+  -- finding. `placed = 0` was skipped as a binding target and so was the
+  -- `placed` on the left of line two -- but the one on the RIGHT is a
+  -- read, and it was reported as a name not in the sandbox. Anything
+  -- gating on this check would have refused a working program.
+  local counter = [[ placed = 0
+                     for i = 1, 3 do placed = placed + 1 end
+                     job.report(placed) ]]
+  local fc = lint.check(counter, lib.allowedNames())
+  ok(lint.has(fc, "undefined-global") == nil,
+     "a global the program assigns is a global it may read",
+     lint.report(fc))
+
+  local multi = [[ a, b = 1, 2
+                   job.report(a + b) ]]
+  ok(lint.has(lint.check(multi, lib.allowedNames()), "undefined-global") == nil,
+     "including both halves of a multiple assignment")
+
+  -- And the check still fires on the thing it is for.
+  ok(lint.has(lint.check("placed = 0\njob.report(placd)\n",
+                         lib.allowedNames()), "undefined-global") ~= nil,
+     "while a typo on the read side is still caught")
+
   -- Legitimate nav.pos() uses must not trip the anchor check.
   local legit = [[
 nav.moveTo(args.origin)
@@ -177,6 +200,52 @@ job.report({ back = geom.eq(here, args.origin) })
   local f6 = lint.check(legit, lib.allowedNames())
   ok(lint.has(f6, "ambient-anchor") == nil,
      "a drift check reads position without anchoring to it")
+end
+
+group("lint: a field that is not on a namespace that is")
+fresh()
+do
+  local executor = require("claude.executor")
+  local names  = executor.globalNames(agent.env())
+  local tables = executor.globalTables(agent.env())
+  local function members(src)
+    local out = {}
+    for _, f in ipairs(lint.check(src, names, tables)) do
+      if f.kind == "unknown-member" then out[#out + 1] = f.detail end
+    end
+    return table.concat(out, "; ")
+  end
+
+  -- The bare-name check cannot see this: `inv` exists, and `fuel` is
+  -- after a dot, so inv.fuel() passes it. That call was written, run,
+  -- and failed in-game. Unlike every other check in lint.lua this one is
+  -- not a heuristic -- the table is right there and the key is in it or
+  -- not.
+  ok(members("local n = inv.fuel()\n"):find("inv has no fuel", 1, true) ~= nil,
+     "a missing field on a real namespace is caught", members("local n = inv.fuel()"))
+  ok(members("block.compare('down')\n") ~= "", "including a deleted one")
+  ok(members("job.report(string.frmat('%d', 1))\n") ~= "",
+     "and a typo in the standard library")
+
+  -- Each exemption is a real case, not caution.
+  ok(members("local p = nav.pos()\nblock.fill(p, p, 'stone')\njob.report(1)\n") == "",
+     "a correct program is clean")
+  ok(members("inv.equip('*crafting*')\nturtle.craft()\n") == "",
+     "turtle is exempt: turtle.craft appears only once a table is equipped")
+  ok(members("local nav = { foo = 1 }\njob.report(nav.foo)\n") == "",
+     "a local shadowing a namespace is the program's own table")
+  ok(members("job.myFlag = true\nif job.myFlag then job.report(1) end\n") == "",
+     "a field the program assigned is a field it may read")
+  ok(members("local c = inv.contents()\njob.report(c.wheat)\n") == "",
+     "a field of a returned table is not a field of the namespace")
+  ok(members("job.report(geom.FACING_DELTA[0].x)\n") == "",
+     "and a real nested field is left alone")
+
+  -- Omitting the tables skips the check, so registration behaviour is
+  -- unchanged for callers that do not pass them.
+  local without = lint.check("local n = inv.fuel()\n", names)
+  ok(lint.has(without, "unknown-member") == nil,
+     "no tables, no member check")
 end
 
 group("lint: declaration vs source")
@@ -744,6 +813,104 @@ do
      "and tells the model it may decline to change anything")
 
   client.message = real
+end
+
+--------------------------------------------------------------------------
+group("a program naming something that does not exist is not run")
+fresh()
+do
+  local client  = require("claude.client")
+  local session = require("claude.session")
+  local prompt  = require("claude.prompt")
+
+  -- The failure this exists for: inv.fuel() does not exist and never
+  -- did. Lua resolves the field when the line runs, so the program
+  -- starts, moves, digs, and dies partway -- leaving the world changed
+  -- for nothing. The answer was in the API listing in its own system
+  -- prompt the whole time.
+  local MISSING = "local f = inv.fuel()\njob.report(f)\n"
+  local GOOD2   = "local f = nav.fuel()\njob.report(f)\n"
+
+  --- A session whose model replies with `replies` in order, and whose
+  --- runner records what it was actually asked to execute.
+  local function scripted(replies, cfg)
+    local n, sent, ran = 0, {}, {}
+    local real = client.message
+    client.message = function(_, body)
+      n = n + 1
+      sent[#sent + 1] = body.messages[#body.messages].content
+      return { text = "```lua\n" .. (replies[n] or replies[#replies]) .. "```",
+               usage = {}, stop = "end_turn", blocks = {} }
+    end
+    local sess = session.new(cfg or { apiKey = "t", model = "stub" }, agent,
+      function(code) ran[#ran + 1] = code; return { ok = true, output = "" } end)
+    return sess, sent, ran, function() client.message = real end
+  end
+
+  local sess, sent, ran, restore = scripted({ MISSING, GOOD2 })
+  local res = sess:handle("report the fuel")
+  ok(res.ok == true, "a corrected program runs", res.error)
+  ok(#ran == 1, "and only the corrected one reaches the turtle", #ran)
+  ok(ran[1] and ran[1]:find("nav.fuel", 1, true) ~= nil,
+     "-- the one that does not name a missing field", ran[1])
+  ok(#sent == 2, "which cost exactly one extra request", #sent)
+  ok(sent[2]:find("inv has no fuel", 1, true) ~= nil,
+     "and the model was told what was missing, not just that it failed",
+     sent[2])
+  ok(sent[2]:find("CURRENT STATE", 1, true) == nil,
+     "without re-sending live state: nothing has happened yet")
+  restore()
+
+  -- Past the budget it is not run at all. Running it anyway would change
+  -- the world up to the bad line in exchange for nothing.
+  sess, sent, ran, restore = scripted({ MISSING, MISSING, GOOD2 })
+  res = sess:handle("report the fuel")
+  ok(res.ok == false, "a program still naming it is refused")
+  ok(res.notRun == true, "and said to be unrun, not failed", tostring(res.notRun))
+  ok(#ran == 0, "nothing was executed", #ran)
+  ok(tostring(res.error):find("fuel", 1, true) ~= nil,
+     "and the reason names the field", res.error)
+  ok(#sent == 2, "with one repair tried, not a loop of them", #sent)
+  restore()
+
+  -- A correct program costs nothing: no extra request, straight to the
+  -- turtle. A gate that charges for every good program is not worth it.
+  sess, sent, ran, restore = scripted({ GOOD2 })
+  res = sess:handle("report the fuel")
+  ok(res.ok == true and #sent == 1 and #ran == 1,
+     "a clean program is not screened twice or charged for",
+     ("%s/%d/%d"):format(tostring(res.ok), #sent, #ran))
+  restore()
+
+  -- The host's agent proxy raises on env() on purpose: the program runs
+  -- on a worker whose capabilities, and so whose sandbox, are not the
+  -- host's to describe. A fleet gets no gate rather than a gate
+  -- answering about the wrong machine -- and must not get a crash.
+  local hostish = {
+    situation = function() return "remote" end,
+    env = function() error("the host does not execute programs", 0) end,
+  }
+  local n2, ran2 = 0, {}
+  local real2 = client.message
+  client.message = function()
+    n2 = n2 + 1
+    return { text = "```lua\n" .. MISSING .. "```", usage = {}, stop = "end_turn",
+             blocks = {} }
+  end
+  local hsess = session.new({ apiKey = "t", model = "stub" }, hostish,
+    function(code) ran2[#ran2 + 1] = code; return { ok = true, output = "" } end)
+  local hres = hsess:handle("report the fuel")
+  ok(hres.ok == true, "a host session is not broken by the gate", hres.error)
+  ok(#ran2 == 1, "it just does not screen, and sends the program on", #ran2)
+  ok(n2 == 1, "spending no request on a check it cannot make", n2)
+  client.message = real2
+
+  -- The prompt has to say the listing is the whole surface, or the model
+  -- has no reason to believe the name is not simply undocumented.
+  local text = prompt.missing({ { line = 4, detail = "inv has no fuel" } })
+  ok(text:find("line 4", 1, true) ~= nil, "the repair prompt carries the line")
+  ok(text:find("not listed", 1, true) ~= nil,
+     "and says an unlisted call does not exist", text)
 end
 
 --------------------------------------------------------------------------

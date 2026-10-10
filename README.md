@@ -635,6 +635,8 @@ next pull fails. The error names the ref and the way back
   is still running the defaults it was installed with. `boot` says when the
   shipped file has changed; `/doctor` prints what is actually in force.
 - `maxRepairs` (default 2) bounds the automatic fix loop.
+- `staticRepairs` (default 1) bounds a separate loop that runs *before* the
+  program does — see below.
 - Responses are streamed. This is not optional in practice: CC:Tweaked kills
   a connection that goes 30s without bytes, and a non-streaming request is
   silent for the whole generation, so long jobs died as `Timed out`.
@@ -679,7 +681,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 692
+`lua5.3 test/all.lua` runs the three suites against a mock world — 722
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
@@ -691,6 +693,39 @@ catch a wrong belief about what CC:Tweaked or Minecraft does, because
 `test/mock.lua` encodes the same belief — several bugs have shipped with a
 passing test that agreed with them. `CLAUDE.md` explains the loop that
 works when the game and the tests disagree.
+
+### A program is checked before it is allowed to move
+
+Lua resolves a name when the line runs, so a program calling a function that
+was never written starts, works, changes the world, and only then dies. That
+is how `inv.fuel()` — a call that does not exist and never did — got as far
+as a real turtle: the answer was in the API listing in its own system prompt
+the whole time.
+
+So before the first move, every generated program is checked against the
+sandbox it is about to run in. Two things are refused:
+
+- a bare name that is not there (`frobnicate`, or `fs` — deliberately absent)
+- a field on a namespace that *is* there (`inv.fuel`, `string.frmat`)
+
+Both are facts rather than predictions: the table is right there and the key
+is in it or not. The surface is asked of the live sandbox rather than kept as
+a list, which means it answers for the machine the program will run on —
+`table.unpack` exists under the `lua5.3` the tests use and does not under
+CC's Cobalt, and only the in-game answer matters.
+
+A program that trips this is sent back once with the specific missing names,
+not a generic failure. If it comes back still naming them it is **not run**:
+executing it would change the world up to the bad line in exchange for
+nothing. A clean program costs no extra request.
+
+Everything else `agent/lint.lua` reports is a judgement about style or about
+a saved routine's contract, and is not grounds for refusing to run anything.
+
+In fleet mode there is no such check. The host's agent proxy raises on
+`env()` by design, because the program runs on a worker whose capabilities —
+and so whose sandbox — are not the host's to describe. A fleet gets no gate
+rather than a gate answering about the wrong machine.
 
 ## Where this is going
 

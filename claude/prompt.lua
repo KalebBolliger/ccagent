@@ -375,6 +375,23 @@ end
 
 --- What we send back after a run fails, so the next attempt is a repair
 --- rather than a fresh guess.
+--- A program that names something the sandbox does not have. Sent before
+--- it runs, so there is no error and no output to quote -- only the list.
+function prompt.missing(findings)
+  local lines = {}
+  for _, f in ipairs(findings) do
+    lines[#lines + 1] = ("  line %s: %s"):format(tostring(f.line or "?"),
+                                                 tostring(f.detail or f.kind))
+  end
+  return "That program was not run. It refers to names that do not exist "
+      .. "in this sandbox, so it would have failed partway through, after "
+      .. "acting on the world:\n\n" .. table.concat(lines, "\n")
+      .. "\n\nThe API listing in the system prompt is the whole surface -- "
+      .. "there is nothing beyond it, and a function that is not listed "
+      .. "does not exist. Reply with a corrected program using only listed "
+      .. "calls. Same format: one ```lua block."
+end
+
 function prompt.failure(err, output)
   local s = "The program failed.\n\nError:\n" .. tostring(err)
   if output and output ~= "" then
