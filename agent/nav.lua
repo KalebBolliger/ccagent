@@ -285,14 +285,31 @@ function nav.faceToward(target)
 end
 
 --- Move one block in any direction word, turning first if needed.
+--- Move one block. A horizontal direction TURNS the turtle to face that
+--- way and LEAVES IT THERE, because a turtle has no sideways move --
+--- only forward, back, up and down.
+---
+--- That matters more than it sounds. A program walking a row and placing
+--- "forward" at each stop -- a mural, a wall, any grid scan -- changes
+--- which way "forward" points the moment it steps sideways, so every
+--- placement after the first goes somewhere else and the turtle walks a
+--- square instead of a line. opts.keepFacing turns back afterwards, at
+--- the cost of two extra turns per step, which is what that kind of
+--- program wants.
 function nav.step(dir, opts)
   dir = tostring(dir):lower()
   if dir == "up" or dir == "down" then return rawMove(dir, opts) end
   if dir == "forward" then return rawMove("forward", opts) end
   if dir == "back" and (opts and opts.noTurn) then return rawMove("back", opts) end
+
+  local was = (opts and opts.keepFacing) and nav.facing() or nil
   local ok, err = nav.face(dir)
   if not ok then return false, err end
-  return rawMove("forward", opts)
+  local moved, merr = rawMove("forward", opts)
+  -- Restore the heading whether or not the move worked: a program that
+  -- handles a failed step still expects to be pointing where it was.
+  if was ~= nil then nav.face(geom.FACING_NAME[was] or was) end
+  return moved, merr
 end
 
 --------------------------------------------------------- calibration ------

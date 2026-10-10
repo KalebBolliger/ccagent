@@ -6,6 +6,38 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 ## Unreleased
 
+**Fixed**
+
+- A program asked to wait for materials could never notice them arriving.
+  `inv` caches and only this library's own operations clear it, so a loop
+  polling `inv.count` between `job.sleep` calls read one snapshot for as
+  long as it ran. Quitting and re-running worked, because `executor.run`
+  invalidates — which made it look like a polling bug rather than a cache
+  one.
+
+  `job.sleep` now drops the inventory cache, and `helper.waitFor` sleeps
+  through it rather than `util.sleep`. That is the third boundary where
+  we start trusting the world again after an arbitrary gap, alongside
+  `executor.run` and `agent.situation`. Capabilities are deliberately not
+  re-probed there: `caps.detect` on an empty cache runs the GPS fix and
+  blocks for two seconds, which is too much for something that may run
+  every 50ms, and `caps.require` already re-probes at the moment a stale
+  answer would actually mislead.
+
+- `nav.step("right")` turns the turtle and leaves it facing that way,
+  because a turtle has no sideways move. Nothing said so. A mural program
+  walked a row placing `"forward"` at each stop, and after the first step
+  `"forward"` pointed somewhere else — so it walked a square, built two
+  columns of wool, and reported `space is occupied` each time it came
+  back round to a cell it had already filled.
+
+  `opts.keepFacing` turns back after moving, which is what row scans,
+  murals and walls need, and the manifest entry now says what the bare
+  call does. The heading is restored whether or not the move succeeded: a
+  program handling a failed step still expects to be pointing where it
+  was.
+
+
 **Added**
 
 - `/share <name>` posts a saved program rather than the last run, with

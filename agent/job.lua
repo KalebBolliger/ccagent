@@ -124,9 +124,29 @@ function job.checkAbort()
   if job.abortFlag then error(job.ABORT, 0) end
 end
 
+--- Pause, and stop trusting what we last saw of the inventory.
+---
+--- A sleep is a gap in which the operator acts: loading the turtle,
+--- emptying it, swapping a tool. `agent/inv.lua` caches, and only this
+--- library's own operations clear that cache, so a program waiting for
+--- materials -- "poll inv.count until the wool arrives" -- reads a
+--- snapshot taken before the operator started and never sees the items
+--- land. That is a loop that cannot finish, and quitting and re-running
+--- is the only thing that helps, because executor.run invalidates.
+---
+--- Clearing costs nothing: it drops a table. The next read pays, and a
+--- loop that never reads the inventory pays nothing at all.
+---
+--- Capabilities are deliberately NOT re-probed here. caps.detect with an
+--- empty cache runs every probe including the GPS fix, which blocks for
+--- two seconds -- too expensive for something that may run every 50ms.
+--- caps.require already re-probes before it refuses, which is the moment
+--- a stale capability would actually mislead anyone.
 function job.sleep(n)
   job.checkAbort()
   util.sleep(n or 0.05)
+  local ok, inv = pcall(require, "agent.inv")
+  if ok and inv and inv.invalidate then inv.invalidate() end
   job.checkAbort()
 end
 

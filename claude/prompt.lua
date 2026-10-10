@@ -93,6 +93,13 @@ HOW TO WRITE GOOD TURTLE CODE
   true in Lua, so `if info.unreachable then` fires on a perfect run. A
   report of "placed 0" with no explanation is the least useful thing a
   program can produce.
+- A turtle can only move forward, back, up and down, so nav.step("right")
+  turns it to face right and leaves it there -- after which "forward"
+  points somewhere new. Walking a row and placing "forward" at each stop
+  therefore builds a square, not a line. Use
+  nav.step(dir, { keepFacing = true }) for murals, walls and grid scans,
+  and check what step returns: a turtle that cannot move keeps placing
+  into the block it just placed.
 - block.detect() is false over water and lava as well as over air -- the
   game counts a liquid as empty space. If the difference matters, use
   block.inspect(), which does see them. Only inspect and scan teach world

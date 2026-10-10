@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-617 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+630 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -162,8 +162,15 @@ Nothing should come back but `noreply@anthropic.com`.
   turtle's GUI is invisible until something re-reads. Every boundary where
   we start trusting the world again after an arbitrary gap has to
   invalidate: `executor.run` before a program starts, `agent.situation`
-  before describing the turtle to Claude. Adding a third such boundary
-  means adding a third invalidation. The same goes for `agent/caps.lua`,
+  before describing the turtle to Claude, and `job.sleep` — because a
+  sleep is a gap the operator acts in, and a program polling `inv.count`
+  until materials arrive would otherwise read one snapshot forever.
+  `helper.waitFor` sleeps through `job.sleep` for that reason. Adding a
+  fourth such boundary means adding a fourth invalidation. Capabilities
+  are deliberately not re-probed on sleep: `caps.detect` with an empty
+  cache runs the GPS fix, which blocks for two seconds, and
+  `caps.require` already re-probes at the moment a stale answer would
+  mislead. The same goes for `agent/caps.lua`,
   which re-probes everything cheap at those boundaries — a new probe is
   refreshed by default, and one too slow to re-run (the GPS fix blocks
   for two seconds) must say so with `{ expensive = true }`.

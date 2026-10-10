@@ -41,13 +41,17 @@ agent.VERSION = "1.2.0"
 local helper = {}
 
 --- Wait until a predicate is true, or give up. Avoids the busy-loop bug.
+---
+--- Sleeps through job.sleep rather than util.sleep so the inventory
+--- cache is dropped each time round: a predicate reading inv.count would
+--- otherwise test the same stale snapshot on every pass and never come
+--- true, which is the exact shape of "wait until the operator loads me".
 function helper.waitFor(pred, timeout, interval)
   local deadline = util.now() + (timeout or 30) * 1000
   while util.now() < deadline do
-    job.checkAbort()
     local ok, v = pcall(pred)
     if ok and v then return true, v end
-    util.sleep(interval or 0.5)
+    job.sleep(interval or 0.5)
   end
   return false, "timed out"
 end
@@ -149,7 +153,7 @@ registry.add("nav", nav, "position, movement, pathfinding", {
   { fn = "facingName", sig = "() -> 'north'|...",            doc = "heading as a word" },
   { fn = "moveTo",     sig = "(pos, opts?) -> ok, err",      doc = "pathfind there; opts: dig, box, adjacent, blocked, onStep" },
   { fn = "moveBy",     sig = "(dx, dy, dz, opts?) -> ok, err", doc = "pathfind to a relative offset" },
-  { fn = "step",       sig = "(dir, opts?) -> ok, err",      doc = "one block; dir is forward/back/left/right/up/down/north/east/south/west" },
+  { fn = "step",       sig = "(dir, opts?) -> ok, err",      doc = "one block; dir is forward/back/left/right/up/down/north/east/south/west. A horizontal dir TURNS the turtle and leaves it facing that way, so 'forward' then means somewhere else -- pass opts.keepFacing to turn back, which is what row-scanning and murals need" },
   { fn = "face",       sig = "(dir) -> ok",                  doc = "turn to a heading or direction word" },
   { fn = "faceToward", sig = "(pos) -> ok",                  doc = "turn to look at a position" },
   { fn = "turnLeft",   sig = "() -> ok" },

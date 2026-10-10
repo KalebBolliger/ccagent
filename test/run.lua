@@ -1268,6 +1268,84 @@ end
 mock.resetHttp()
 
 --------------------------------------------------------------------------
+group("a sleeping program must see what the operator did")
+fresh()
+do
+  -- The failure this fixes: a program told to wait for materials polls
+  -- inv.count in a loop, the operator fills the turtle, and the count
+  -- never changes -- because inv caches and nothing between iterations
+  -- dropped it. Quitting and re-running worked, since executor.run
+  -- invalidates, which is what made it look like a polling bug.
+  mock.turtle.slots[1] = nil
+  inv.invalidate()
+  ok(inv.count("minecraft:green_wool") == 0, "nothing aboard to start")
+
+  -- The operator loads the turtle. Nothing in the library did this, so
+  -- nothing cleared the cache.
+  mock.turtle.slots[1] = { name = "minecraft:green_wool", count = 64 }
+  ok(inv.count("minecraft:green_wool") == 0,
+     "and the cache still says so, which is the whole problem")
+
+  agent.job.sleep(0)
+  ok(inv.count("minecraft:green_wool") == 64,
+     "a sleep is where we start trusting the world again",
+     inv.count("minecraft:green_wool"))
+
+  -- helper.waitFor is the blessed way to wait, and had the same hole.
+  mock.turtle.slots[2] = nil
+  inv.invalidate()
+  local polls = 0
+  local okWait = agent.helper.waitFor(function()
+    polls = polls + 1
+    local enough = inv.count("minecraft:red_wool") >= 8
+    -- the operator loads the turtle after the first look
+    if polls == 1 then
+      mock.turtle.slots[2] = { name = "minecraft:red_wool", count = 8 }
+    end
+    return enough
+  end, 5, 0)
+  ok(okWait, "waitFor sees an inventory that changed under it", polls)
+  ok(polls == 2, "on the very next poll, because the sleep dropped the "
+     .. "cache -- without that it polls a stale count until it times out",
+     polls)
+end
+
+fresh()
+--------------------------------------------------------------------------
+group("nav.step turns, which is why murals came out as pillars")
+fresh()
+do
+  -- A turtle has no sideways move. Stepping right turns it right and
+  -- leaves it there, so a row-scanning program's "forward" points
+  -- somewhere new after the first step and it walks a square.
+  nav.face("north")
+  ok(nav.facing() == 0, "facing north")
+  ok(nav.step("right"), "a step right moves")
+  ok(nav.facing() == 1, "and leaves the turtle facing east -- the trap",
+     nav.facing())
+
+  -- keepFacing is the primitive a mural needs.
+  nav.face("north")
+  local before = nav.pos()
+  ok(nav.step("right", { keepFacing = true }), "keepFacing still moves")
+  ok(nav.facing() == 0, "but comes back to the original heading",
+     nav.facing())
+  local after = nav.pos()
+  ok(after.x == before.x + 1 and after.z == before.z,
+     "having actually gone one block east",
+     ("%d,%d -> %d,%d"):format(before.x, before.z, after.x, after.z))
+
+  -- The heading is restored even when the move fails, or a program
+  -- handling a failed step is left pointing somewhere it did not choose.
+  nav.face("north")
+  mock.set(nav.pos().x + 1, nav.pos().y, nav.pos().z, "minecraft:bedrock")
+  local moved = nav.step("right", { keepFacing = true, dig = false })
+  ok(not moved, "a blocked step fails")
+  ok(nav.facing() == 0, "and still restores the heading", nav.facing())
+end
+
+fresh()
+--------------------------------------------------------------------------
 group("liquids: detect and inspect disagree, on purpose")
 fresh()
 do
