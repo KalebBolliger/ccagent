@@ -63,6 +63,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0        # the grep is over all of it, not the tip
+          # On a pull_request event checkout defaults to refs/pull/N/merge
+          # -- a merge commit GitHub synthesises, authored by whoever
+          # opened the PR. That commit is not in the history and never
+          # will be, so scanning it reported a leak in a commit that does
+          # not exist. Take the real head instead; on a push event this
+          # expression is empty and the default applies.
+          ref: ${{ github.event.pull_request.head.sha }}
 
       # The check CLAUDE.md asks for before every push, which until now
       # ran only when somebody remembered. A leak caught on a branch is a
@@ -78,17 +85,37 @@ jobs:
       # judgement call every commit message needs.
       - name: no secrets, addresses or session links in commits
         run: |
-          # Strip the one permitted address before looking, rather than
-          # dropping every line that mentions it -- a second address on
-          # the same line as the trailer would survive the filter and be
-          # missed by it.
-          hits=$(git log --format='%an <%ae>%n%B' \
-                 | sed 's/noreply@anthropic\.com//g' \
-                 | grep -niE 'session_|claude\.ai/code|@[a-z0-9.-]+\.[a-z]{2,}' || true)
-          if [ -n "$hits" ]; then
-            echo "$hits"
+          # Two rules, because the two halves of a commit carry different
+          # risk. Message BODIES are what gets written here, so they are
+          # the surface a leak actually reaches. AUTHOR lines are metadata
+          # git requires and the repository owner chooses; policing their
+          # content is not this check's job, but an author line carrying a
+          # real address instead of a forge's privacy alias is still worth
+          # catching.
+          fail=0
+
+          # Bodies. The permitted address is stripped rather than its line
+          # dropped, so a second address beside the trailer cannot hide
+          # behind it.
+          bodies=$(git log --format='%B' \
+                   | sed 's/noreply@anthropic\.com//g' \
+                   | grep -niE 'session_|claude\.ai/code|@[a-z0-9.-]+\.[a-z]{2,}' || true)
+          if [ -n "$bodies" ]; then
+            echo "in a commit message:"; echo "$bodies"; fail=1
+          fi
+
+          # Authors. noreply@anthropic.com and a forge privacy alias
+          # (<handle>@users.noreply.github.com) are both addresses that
+          # exist so a real one is not published; anything else is one.
+          authors=$(git log --format='%an <%ae>' | sort -u \
+                    | grep -viE '<noreply@anthropic\.com>|@users\.noreply\.github\.com' || true)
+          if [ -n "$authors" ]; then
+            echo "an author line carries a real address:"; echo "$authors"; fail=1
+          fi
+
+          if [ $fail -ne 0 ]; then
             echo
-            echo "See CLAUDE.md 'Never commit'. Nothing but noreply@anthropic.com belongs here."
+            echo "See CLAUDE.md 'Never commit'."
             exit 1
           fi
           echo "clean"

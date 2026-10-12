@@ -97,6 +97,20 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- The history check failed on a commit that does not exist. On a
+  `pull_request` event `actions/checkout` takes `refs/pull/N/merge`, a
+  merge commit GitHub synthesises and authors as whoever opened the PR, so
+  the grep reported a leak in a commit that is not in the history and
+  never will be -- over `<handle>@users.noreply.github.com`, an address
+  that exists precisely so a real one is not published.
+
+  It now checks out the real head, and the check is split in two, because
+  the halves of a commit carry different risk. Message *bodies* are what
+  gets written here, so they keep the full pattern. *Author* lines are
+  metadata git requires and the repository owner chooses; a forge privacy
+  alias is allowed there, and a real address still is not. A handle in a
+  message body is still a finding -- the exemption does not cross over.
+
 - `test/all.lua` ran its child suites under a hardcoded `lua5.3`, so
   `lua5.1 test/all.lua` reported on 5.3 and said nothing about 5.1 -- a
   check answering about an interpreter nobody asked it about. It now uses

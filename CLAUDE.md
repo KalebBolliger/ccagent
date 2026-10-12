@@ -127,13 +127,20 @@ which is just as public and much harder to correct later.
 Commit trailers are subject to all of the above: `Co-Authored-By:` is fine,
 a session or conversation URL is not.
 
-Before pushing anything new here, and always before making history public:
+Run this **after committing and before pushing**, and always before
+making history public. Running it before `git commit` — easy to do when
+both are in one command — checks everything except the message you are
+about to add, which is the one thing that has not been checked yet:
 
 ```
 git log --format='%an <%ae>%n%B' | grep -niE 'session_|claude\.ai/code|@[a-z0-9.-]+\.[a-z]{2,}'
 ```
 
-Nothing should come back but `noreply@anthropic.com`.
+Nothing should come back but `noreply@anthropic.com`. CI runs the same
+thing, split so that an author line may carry a forge privacy alias and a
+message body may not — and the first commit it caught was one whose
+message spelled such an alias out as an example. An address-shaped
+literal belongs in a file, not in a commit message.
 
 ## Habits specific to this repo
 
