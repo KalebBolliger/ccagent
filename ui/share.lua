@@ -52,9 +52,11 @@ local function tailFile(path, n)
   for i = #lines - n + 1, #lines do out[#out + 1] = lines[i] end
   return table.concat(out, "\n")
 end
+share.tail = tailFile
 
 --- Everything worth knowing about the last run, as one blob of text.
----   parts { version, origin, settings, situation, request, code, result, log }
+---   parts { version, origin, settings, situation, request, code, result,
+---           trail, log }
 --- Every field is optional; a bundle of what is known beats none.
 function share.bundle(parts)
   parts = parts or {}
@@ -90,11 +92,19 @@ function share.bundle(parts)
   if r then
     local head = r.ok and "ok" or ("failed: " .. tostring(r.error or "?"))
     if r.aborted then head = "aborted" end
+    if r.running then head = "still running (output so far)" end
     out[#out + 1] = rule("result") .. head
     if r.elapsed then out[#out + 1] = ("elapsed: %ss"):format(tostring(r.elapsed)) end
     if r.output and r.output ~= "" then
       out[#out + 1] = rule("output") .. tostring(r.output)
     end
+  end
+
+  -- Where the turtle believed it was, sampled while the job ran. A
+  -- program's own output says what it meant to do; this says what the
+  -- turtle did, which is the half you need when it goes round in circles.
+  if parts.trail and parts.trail ~= "" then
+    out[#out + 1] = rule("trail") .. tostring(parts.trail)
   end
 
   if parts.log and parts.log ~= "" then

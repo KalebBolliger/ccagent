@@ -115,6 +115,15 @@ cc> /stop all
 A launched job is not waited on, so it has no time limit on the host;
 `/stop` and `/poll` still reach a worker while it is busy.
 
+`/share 3` asks worker 3 for its report — the program, its output, its log,
+and a trail of where it believed it was while it ran — and saves it to
+`/ccagent/reports/w3.txt` on the host before offering to post it.
+
+**Moved a turtle without GPS?** Run `/forget` on it (or `/forget 3` from
+the host). Without GPS a turtle boots into the position it last stored,
+because nothing tells it that it was carried; until you reset it, it
+plans with the old place's map and the old heading.
+
 The prompt is `cc>` — not the shell's `>`, so it is clear which of the two
 you are typing at. On a host aimed at one turtle it carries the target:
 `cc@7>`.
@@ -700,7 +709,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 738
+`lua5.3 test/all.lua` runs the three suites against a mock world — 740
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

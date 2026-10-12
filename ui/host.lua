@@ -271,6 +271,8 @@ local HELP = {
   "/check <name>     lint a saved program without registering",
   "/jobs [name]      list saved programs, or describe one",
   "/stop [id|all]    abort a running job",
+  "/share [id]       save, then post, a worker's last run",
+  "/forget [id|all]  worker restarts its map where it stands",
   "/manifest         the API workers are given, and its token cost",
   "/notes <text>     house rules appended to the system prompt",
   "/model [id]       show or change the model",
@@ -369,6 +371,63 @@ local function command(input)
                                     reusable = reusable, dryRun = true })
       if r and r.ok then console.head("not run. /save <name>, then /launch <name> all")
       elseif r then console.err(util.clip(tostring(r.error), 300)) end
+    end
+
+  elseif cmd == "forget" then
+    local ids, err = M.parseIds(rest, target)
+    if not ids then console.warn(err)
+    else
+      for _, id in ipairs(ids) do net.send(id, { t = "forget" }, cfg.protocol) end
+      console.warn("forget sent to " .. table.concat(ids, ","))
+      console.dim("each now treats its spot as 0,0,0")
+    end
+
+  elseif cmd == "share" then
+    -- The worker holds the evidence (its program, output, log and the
+    -- trail of where it went), so ask it; the host adds the request and
+    -- model that produced the program. Saved to a file first, so a
+    -- report exists even where nothing should be posted.
+    local id = tonumber(rest) or target
+    if not id then console.warn("usage: /share <id>"); return true end
+    net.send(id, { t = "report" }, cfg.protocol)
+    local msg = net.await(id, "report", 10, cfg.protocol)
+    if not msg then console.err("worker " .. id .. " did not answer"); return true end
+    local text = tostring(msg.text)
+    local w = workers[id] or {}
+    local head = { ("worker %d (%s)"):format(id, tostring(w.label or "?")),
+                   "host: " .. agent.VERSION }
+    local okO, origin = pcall(require, "ui.origin")
+    if okO then head[#head + 1] = "host " .. tostring(origin.line({ always = true })) end
+    if w.session and w.session.lastCode then
+      local st = require("claude.client").settings(cfg)
+      head[#head + 1] = ("model: %s effort %s"):format(st.model, st.effort)
+    end
+    text = table.concat(head, "\n") .. "\n" .. text
+
+    local share = require("ui.share")
+    if share.carriesSecret(text, cfg.apiKey) then
+      console.err("report contains the api key; not sent")
+      return true
+    end
+    local path = ("/ccagent/reports/w%d.txt"):format(id)
+    if _G.fs then
+      fs.makeDir("/ccagent/reports")
+      local h = fs.open(path, "w")
+      if h then h.write(text); h.close(); console.head("saved " .. path) end
+    end
+    if not cfg.share or not cfg.share.url or cfg.share.url == "" then
+      console.dim("share.url not set; not posting")
+    else
+      console.info(("%d chars, incl. positions"):format(#text))
+      if not (cfg.share.redact and #cfg.share.redact > 0) then
+        console.dim("no redact rules set")
+      end
+      local yn = console.ask("post it publicly? [y/N] ")
+      if yn and yn:lower():sub(1, 1) == "y" then
+        console.status("posting...")
+        local where, err = share.send(cfg.share, text)
+        if where then console.say(where) else console.err(tostring(err)) end
+      end
     end
 
   elseif cmd == "launch" then

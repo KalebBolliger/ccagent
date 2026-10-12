@@ -107,9 +107,10 @@ function agent.boot(opts)
     if not ok then util.log.warn("calibration: %s", tostring(err)) end
     if not nav.home() then nav.setHome() end
   end
-  -- Observations are only about the frame they were made in. Without GPS
-  -- a re-placed turtle starts a new one, and the old memory then
-  -- describes somewhere else.
+  -- Observations are only about the frame they were made in, so a new
+  -- frame drops them. Note what does NOT start one: without GPS a turtle
+  -- that was carried somewhere boots into its stored pose, because
+  -- nothing in the game says it moved. Only /forget (or a GPS fix) does.
   world.useFrame(nav.frameId())
 
   state.flush()

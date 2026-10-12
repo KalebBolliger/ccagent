@@ -1128,6 +1128,19 @@ do
   ok(branched:find("ref wip", 1, true) ~= nil,
      "and which copy of the library produced it", branched)
 
+  -- A fleet worker's report: the job may still be running, and the trail
+  -- of positions is what shows a turtle going round in circles when its
+  -- own output only says what it meant to do.
+  local live = share.bundle({
+    code = "nav.moveTo(p)", trail = "    2s 0,64,-1 facing north",
+    result = { running = true, output = "lane 1" },
+  })
+  ok(live:find("still running", 1, true) ~= nil and
+     live:find("failed", 1, true) == nil,
+     "a running job is reported as running, not as failed", live)
+  ok(live:find("0,64,-1", 1, true) ~= nil and live:find("lane 1", 1, true) ~= nil,
+     "with its trail and its output so far")
+
   -- Missing pieces are omitted, not rendered as "nil".
   local sparse = share.bundle({ version = "1.2.0" })
   ok(sparse:find("nil", 1, true) == nil, "an empty bundle prints no nils",

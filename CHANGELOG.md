@@ -22,7 +22,26 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   to completion on one worker first, with the host's prompt held the
   whole time.
 
+- `/share [id]` on the host. It asks the worker for its report -- the
+  program it last ran, its output (so far, if still running), its state,
+  the log tail, and a **trail** of where it believed it was every couple
+  of seconds -- saves it to `/ccagent/reports/w<id>.txt` on the host,
+  and then offers to post it like the controller's `/share`. The trail
+  exists because a program's output says what it meant to do and a
+  turtle going round in circles needs the other half.
+
+- `/forget` on a worker, and `/forget [id|all]` on the host, as on the
+  controller. A worker without GPS now says so at boot.
+
 **Fixed**
+
+- Without GPS, a turtle carried to a new spot boots into its *stored*
+  pose: it believes it is still where it last stood, facing the way it
+  last faced, with that place's block memory and home. `state.lua`
+  keeps the pose across a re-place on purpose (it is right after a
+  chunk reload, and indistinguishable from one), but a comment in
+  `agent.boot` claimed the opposite, and workers had no way to reset.
+  Run `/forget` on any GPS-less turtle that has been moved.
 
 - A worker running a job now still hears the host. Its listener was the
   thing running the job, so `/stop` and `/poll` sent mid-job were never

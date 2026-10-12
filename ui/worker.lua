@@ -29,6 +29,11 @@ local M = {}
 
 local cfg, hostId, running = nil, nil, true
 
+-- What /share on the host asks for: the program this worker last ran,
+-- what came of it, and where the turtle went while it ran.
+local last = { src = nil, result = nil, trail = {}, lines = {}, situation = nil }
+local TRAIL_MAX = 200
+
 local function findHost()
   if not _G.rednet then return nil end
   local id = rednet.lookup(cfg.protocol, cfg.hostname)
@@ -47,6 +52,51 @@ local function describe()
   }
 end
 
+--- One line per position change, newest last. Reads the pose the library
+--- already tracks -- no turtle call, so it is safe beside a running job.
+local function sampleTrail(t0)
+  local p = agent.nav.pos()
+  if not p then return end
+  local f = agent.nav.facing and agent.nav.facing()
+  local line = ("%5ds %s"):format(math.floor(os.clock() - t0),
+                                  agent.geom.tostring(p, f))
+  local prev = last.trail[#last.trail]
+  if prev and prev:sub(8) == line:sub(8) then return end
+  last.trail[#last.trail + 1] = line
+  if #last.trail > TRAIL_MAX then table.remove(last.trail, 1) end
+end
+
+--- The report /share posts. Built here because only the worker has the
+--- log, the output and the trail; the host adds what only it knows.
+local function report(busyJob)
+  local share = require("ui.share")
+  local okOrigin, origin = pcall(require, "ui.origin")
+  local situation = busyJob
+    and ((last.situation or "") .. "\n(busy with job " .. tostring(busyJob) .. ")")
+    or agent.situation()
+  local trail = #last.trail > 0 and table.concat(last.trail, "\n") or nil
+  return share.bundle({
+    version   = agent.VERSION,
+    origin    = okOrigin and origin.line({ always = true }) or nil,
+    situation = situation,
+    code      = last.src,
+    result    = last.result,
+    trail     = trail and ("time  believed position (frame: see state)\n" .. trail),
+    log       = share.tail(cfg.logFile, share.logLines),
+  })
+end
+
+--- Start over from where the turtle stands now. Without GPS the pose is
+--- kept across a reboot -- right after a chunk reload, wrong after the
+--- turtle was carried somewhere: it boots believing it is still where it
+--- last stood, with that place's block memory and home, and nothing in
+--- the game tells it otherwise. Same as the controller's /forget.
+local function forget()
+  agent.world.clear()
+  agent.state.clear()
+  agent.boot()
+end
+
 local function announce()
   local d = describe()
   d.t = "hello"
@@ -58,6 +108,10 @@ local function runProgram(msg)
   console.status("running job " .. tostring(msg.job))
   local lastLine
   local result
+  local t0 = os.clock()
+  last.src, last.result, last.trail, last.lines = msg.src, nil, {}, {}
+  last.situation = agent.situation()
+  sampleTrail(t0)
   local function work()
     result = executor.run(msg.src, agent.env(), {
       name = msg.job or "job",
@@ -66,6 +120,8 @@ local function runProgram(msg)
         elseif kind == "report" then console.head("= " .. text)
         else console.say(text) end
         lastLine = text
+        last.lines[#last.lines + 1] = tostring(text)
+        if #last.lines > 400 then table.remove(last.lines, 1) end
         if hostId then
           net.send(hostId, { t = "output", kind = kind, text = text,
                              job = msg.job, extra = extra }, cfg.protocol)
@@ -92,12 +148,28 @@ local function runProgram(msg)
         elseif m.t == "run" then
           net.send(id, { t = "result", job = m.job, ok = false,
                          error = "busy with job " .. tostring(msg.job) }, cfg.protocol)
+        elseif m.t == "forget" then
+          net.send(id, { t = "output", kind = "warn", job = msg.job,
+                         text = "busy; /stop first, then /forget" }, cfg.protocol)
+        elseif m.t == "report" then
+          last.result = { running = true, output = table.concat(last.lines, "\n") }
+          net.send(id, { t = "report", text = report(msg.job) }, cfg.protocol)
         end
       end
     end
   end
 
-  if _G.parallel then parallel.waitForAny(work, control) else work() end
+  local function trail()
+    while true do
+      sleep(2)
+      sampleTrail(t0)
+    end
+  end
+
+  if _G.parallel then parallel.waitForAny(work, control, trail) else work() end
+  sampleTrail(t0)
+  last.result = result
+  last.situation = nil
   agent.state.flush()
   if hostId then
     net.send(hostId, {
@@ -127,6 +199,15 @@ local function listen()
         net.send(id, d, cfg.protocol)
       elseif msg.t == "abort" then
         executor.requestAbort()
+      elseif msg.t == "report" then
+        hostId = id
+        net.send(id, { t = "report", text = report(nil) }, cfg.protocol)
+      elseif msg.t == "forget" then
+        hostId = id
+        forget()
+        console.head("pose and memory cleared (host)")
+        local d = describe(); d.t = "state"
+        net.send(id, d, cfg.protocol)
       elseif msg.t == "ack" then
         console.dim(tostring(msg.text))
       elseif msg.t == "hostup" then
@@ -152,6 +233,10 @@ local function prompt()
     if input == "/exit" then running = false
     elseif input == "/state" then console.info(agent.situation())
     elseif input == "/stop" then executor.requestAbort()
+    elseif input == "/forget" then
+      forget()
+      console.head("pose and memory cleared")
+      console.info(agent.situation())
     elseif input == "/host" then
       hostId = findHost()
       console.dim(hostId and ("host is " .. hostId) or "no host found")
@@ -188,6 +273,10 @@ function M.run()
 
   hostId = findHost()
   console.info(agent.situation())
+  if agent.nav.frame() == "local" then
+    console.warn("no GPS: position kept from last boot")
+    console.dim("carried here? /forget (or host /forget)")
+  end
   console.dim(hostId and ("host: " .. hostId) or "waiting for a host...")
   announce()
 
