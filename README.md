@@ -98,7 +98,8 @@ cc@7> all come home and unload
 
 `@id` and `all` ask Claude and then **wait for the run to finish** — `all`
 does each worker in turn. To put several turtles to work at the same time,
-get a program right once, `/save` it, and launch it:
+get a program right once (`/dry <request>` writes one for the current
+worker without running it), `/save` it, and launch it:
 
 ```
 cc> /launch scout all          (or /launch scout 3,7)

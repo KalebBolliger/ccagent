@@ -16,6 +16,12 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   its result is printed when it lands, and `/who` shows each worker's job
   and latest line. `/stop all` aborts the lot.
 
+- `/dry <request>` on the host, as on the controller: write a program for
+  the current worker without running it, so it can be read, `/save`d and
+  launched. Without it the only route to a saved program was running it
+  to completion on one worker first, with the host's prompt held the
+  whole time.
+
 **Fixed**
 
 - A worker running a job now still hears the host. Its listener was the

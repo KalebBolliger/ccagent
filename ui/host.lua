@@ -259,6 +259,7 @@ local HELP = {
   "/poll             refresh every worker's state",
   "/state [id]       show a worker's state",
   "@<id> +<request>  ask for a REUSABLE routine",
+  "/dry <request>    write a program for the current worker, do not run it",
   "/code             last program for the current worker",
   "/again            re-run it (no API call)",
   "/save <name>      save it",
@@ -351,6 +352,23 @@ local function command(input)
       console.status(("sending %s to worker %d"):format(name, id))
       local r = remoteRun(id)(src, { onOutput = function(k, t) console.say(t) end })
       if r.ok then console.head("done") else console.err(tostring(r.error)) end
+    end
+
+  elseif cmd == "dry" then
+    -- The way to get a program for /launch without first running it to
+    -- completion on one worker: written against the current worker's
+    -- state and capabilities, then /save and /launch it.
+    local sess = target and sessionFor(target)
+    if rest == "" then console.warn("usage: /dry <request>")
+    elseif not sess then console.warn("no worker selected (/use <id>)")
+    else
+      local reusable = rest:sub(1, 1) == "+"
+      if reusable then rest = util.trim(rest:sub(2)) end
+      poll(target)
+      local r = sess:handle(rest, { onEvent = events(), name = "w" .. target,
+                                    reusable = reusable, dryRun = true })
+      if r and r.ok then console.head("not run. /save <name>, then /launch <name> all")
+      elseif r then console.err(util.clip(tostring(r.error), 300)) end
     end
 
   elseif cmd == "launch" then
