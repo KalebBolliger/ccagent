@@ -4,13 +4,16 @@
   Worker -> host
     {t="hello",  caps=<flags>, situation=<string>, label=<string>}
     {t="state",  situation=<string>, caps=<flags>}
+    {t="state",  busy=<job id>, last=<string>, label=}   -- poll mid-job
     {t="output", kind=, text=, job=}
     {t="result", job=, ok=, error=, output=, result=, elapsed=}
+                                          -- error "busy with job <id>" when
+                                          -- a run arrives mid-job
     {t="ask",    text=<string>}          -- request typed at the turtle
 
   Host -> worker
     {t="run",    job=<id>, src=<lua>}
-    {t="abort"}
+    {t="abort"}                           -- heard mid-job, too
     {t="poll"}                            -- please send state
     {t="ack",    text=<string>}
 --------------------------------------------------------------------------]]

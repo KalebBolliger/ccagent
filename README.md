@@ -96,6 +96,24 @@ cc> @7 build a 9x9 cobblestone floor under you
 cc@7> all come home and unload
 ```
 
+`@id` and `all` ask Claude and then **wait for the run to finish** — `all`
+does each worker in turn. To put several turtles to work at the same time,
+get a program right once, `/save` it, and launch it:
+
+```
+cc> /launch scout all          (or /launch scout 3,7)
+scout -> 3,7
+[3] heading to sector 1
+[7] waiting for: 32 coal
+cc> /who
+ 3    probe-a        [scout] chest at 12,-51,40: 2 echo_shard
+ 7    probe-b        [scout] waiting for: 32 coal
+cc> /stop all
+```
+
+A launched job is not waited on, so it has no time limit on the host;
+`/stop` and `/poll` still reach a worker while it is busy.
+
 The prompt is `cc>` — not the shell's `>`, so it is clear which of the two
 you are typing at. On a host aimed at one turtle it carries the target:
 `cc@7>`.
@@ -681,7 +699,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 730
+`lua5.3 test/all.lua` runs the three suites against a mock world — 738
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

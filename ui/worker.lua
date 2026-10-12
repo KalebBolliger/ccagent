@@ -35,11 +35,15 @@ local function findHost()
   return id
 end
 
+local function describeLabel()
+  return (os.getComputerLabel and os.getComputerLabel()) or ("turtle-" .. os.getComputerID())
+end
+
 local function describe()
   return {
     caps      = agent.caps.detect(),
     situation = agent.situation(),
-    label     = (os.getComputerLabel and os.getComputerLabel()) or ("turtle-" .. os.getComputerID()),
+    label     = describeLabel(),
   }
 end
 
@@ -52,18 +56,48 @@ end
 
 local function runProgram(msg)
   console.status("running job " .. tostring(msg.job))
-  local result = executor.run(msg.src, agent.env(), {
-    name = msg.job or "job",
-    onOutput = function(kind, text, extra)
-      if kind == "warn" then console.warn(text)
-      elseif kind == "report" then console.head("= " .. text)
-      else console.say(text) end
-      if hostId then
-        net.send(hostId, { t = "output", kind = kind, text = text,
-                           job = msg.job, extra = extra }, cfg.protocol)
+  local lastLine
+  local result
+  local function work()
+    result = executor.run(msg.src, agent.env(), {
+      name = msg.job or "job",
+      onOutput = function(kind, text, extra)
+        if kind == "warn" then console.warn(text)
+        elseif kind == "report" then console.head("= " .. text)
+        else console.say(text) end
+        lastLine = text
+        if hostId then
+          net.send(hostId, { t = "output", kind = kind, text = text,
+                             job = msg.job, extra = extra }, cfg.protocol)
+        end
+      end,
+    })
+  end
+
+  -- listen() is parked inside this call for as long as the job runs, so
+  -- without a second reader nothing hears the host: /stop and /poll went
+  -- unanswered until a job ended by itself, which for a long expedition
+  -- is exactly when you no longer need them. A poll is answered from what
+  -- is already known rather than by calling describe(), which probes the
+  -- turtle and would interleave its own turtle calls with the job's.
+  local function control()
+    while true do
+      local id, m = net.receive(nil, cfg.protocol)
+      if id and m then
+        if m.t == "abort" then
+          executor.requestAbort()
+        elseif m.t == "poll" then
+          net.send(id, { t = "state", busy = msg.job, last = lastLine,
+                         label = describeLabel() }, cfg.protocol)
+        elseif m.t == "run" then
+          net.send(id, { t = "result", job = m.job, ok = false,
+                         error = "busy with job " .. tostring(msg.job) }, cfg.protocol)
+        end
       end
-    end,
-  })
+    end
+  end
+
+  if _G.parallel then parallel.waitForAny(work, control) else work() end
   agent.state.flush()
   if hostId then
     net.send(hostId, {

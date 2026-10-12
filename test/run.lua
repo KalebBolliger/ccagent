@@ -2020,5 +2020,67 @@ do
 end
 
 --------------------------------------------------------------------------
+group("a fleet can be started at once and watched while it works")
+
+-- `all` asks Claude once per worker and runs them back to back, and /run
+-- holds the prompt until its one worker finishes, so three probes sent
+-- into the same structure left one after another. /launch sends and
+-- returns; progress and the result then arrive as stray traffic, which is
+-- the only place a launched job is ever seen.
+do
+  local sent = {}
+  local prevRednet, prevTest = _G.rednet, _G._TEST
+  _G.rednet = {
+    send = function(id, msg) sent[#sent + 1] = { id = id, msg = msg } end,
+    broadcast = function() end,
+    receive = function() return nil end,
+  }
+  _G._TEST = true
+  local prevId = os.getComputerID
+  os.getComputerID = prevId or function() return 1 end
+  local host = require("ui.host")
+  host.configure({ protocol = "ccagent" })
+  local console = require("ui.console")
+  local shown = {}
+  local saved = {}
+  for _, k in ipairs({ "say", "warn", "err", "head", "dim" }) do
+    saved[k] = console[k]
+    console[k] = function(t) shown[#shown + 1] = t end
+  end
+
+  host.handleStray(3, { t = "hello", label = "probe-a", situation = "s3" })
+  host.handleStray(7, { t = "hello", label = "probe-b", situation = "s7" })
+  sent = {}
+
+  local ids = host.parseIds("all")
+  ok(#ids == 2 and ids[1] == 3 and ids[2] == 7, "all names every known worker")
+  ids = host.parseIds("7, 3")
+  ok(#ids == 2 and ids[1] == 7 and ids[2] == 3, "a list is taken as given")
+  ok(host.parseIds("", 3)[1] == 3, "and nothing means the current worker")
+  ok(host.parseIds("3,x") == nil, "a typo is refused rather than skipped")
+
+  local went = host.launch("job.say('hi')", { 3, 7 }, "probe")
+  ok(#went == 2 and #sent == 2, "launch sends to every worker", #sent)
+  ok(sent[1].msg.t == "run" and sent[2].msg.t == "run" and
+     sent[1].msg.job ~= sent[2].msg.job,
+     "each as its own job, without waiting for the first")
+
+  host.handleStray(3, { t = "output", kind = "say", text = "found 2 shards" })
+  local seen = false
+  for _, l in ipairs(shown) do if l == "[3] found 2 shards" then seen = true end end
+  ok(seen, "a launched job's progress is shown with its worker's id")
+
+  shown = {}
+  host.handleStray(7, { t = "result", ok = false, error = "busy with job j1" })
+  host.handleStray(3, { t = "result", ok = true, elapsed = 12 })
+  local done = false
+  for _, l in ipairs(shown) do if l:find("[3] done", 1, true) then done = true end end
+  ok(done, "and so is its result, which nothing else is waiting for")
+
+  for k, f in pairs(saved) do console[k] = f end
+  _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
+end
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

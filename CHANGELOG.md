@@ -8,6 +8,24 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- `/launch <name> all|id,id` on the host starts a saved program on several
+  workers at once and returns the prompt straight away. Before this a
+  fleet could not work in parallel: `all` asks Claude once per worker and
+  runs them back to back, and `/run` holds the prompt until its one worker
+  finishes. A launched job's output arrives prefixed with the worker's id,
+  its result is printed when it lands, and `/who` shows each worker's job
+  and latest line. `/stop all` aborts the lot.
+
+**Fixed**
+
+- A worker running a job now still hears the host. Its listener was the
+  thing running the job, so `/stop` and `/poll` sent mid-job were never
+  read and a long job could only be stopped from the turtle's own
+  keyboard. The job now runs beside a small reader that honours `abort`,
+  answers `poll` with the job id and last output line (without probing the
+  turtle, which would interleave turtle calls with the job's), and refuses
+  a second `run` with `busy with job <id>` instead of dropping it.
+
 - CI parses every tracked `.lua` file under both `luac5.3` and `luac5.1`,
   runs the suite, and greps the history for the things `CLAUDE.md`
   forbids committing.

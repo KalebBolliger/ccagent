@@ -62,7 +62,11 @@ local function poll(id, timeout)
   local msg = net.await(id, { "state", "hello" }, timeout or 4, cfg.protocol)
   if msg then
     local w = workers[id] or {}
-    w.caps, w.situation, w.label = msg.caps or w.caps, msg.situation, msg.label or w.label
+    w.caps, w.situation, w.label = msg.caps or w.caps, msg.situation or w.situation,
+                                   msg.label or w.label
+    -- A worker that is mid-job answers with what it is doing instead of a
+    -- fresh probe; see runProgram in ui/worker.lua.
+    w.busy, w.last = msg.busy, msg.last or w.last
     w.lastSeen = os.clock()
     workers[id] = w
     return w
@@ -156,11 +160,78 @@ function M.handleStray(id, msg)
     end
     M.dispatch(id, msg.text)
   elseif msg.t == "output" then
-    console.say(("[%d] %s"):format(id, tostring(msg.text)))
+    -- Launched jobs arrive here: nothing is blocking on them, so this is
+    -- the only place their progress is seen. Keep the latest line so /who
+    -- can show where each probe is without scrolling back.
+    local w = workers[id] or {}
+    workers[id] = w
+    w.last, w.lastSeen = tostring(msg.text), os.clock()
+    local line = ("[%d] %s"):format(id, tostring(msg.text))
+    if msg.kind == "warn" then console.warn(line) else console.say(line) end
+  elseif msg.t == "result" then
+    local w = workers[id] or {}
+    workers[id] = w
+    -- A "busy" refusal is about the job we tried to start, not the one
+    -- still running there.
+    local refused = not msg.ok and tostring(msg.error):match("^busy with")
+    if not refused then w.busy = nil end
+    w.lastSeen = os.clock()
+    if msg.situation then w.situation = msg.situation end
+    if msg.ok then
+      console.head(("[%d] done in %.1fs"):format(id, msg.elapsed or 0))
+    elseif msg.aborted then
+      console.warn(("[%d] stopped"):format(id))
+    else
+      console.err(("[%d] %s"):format(id, util.clip(tostring(msg.error), 300)))
+    end
+    if not refused then
+      w.last = msg.ok and "done" or (msg.aborted and "stopped" or "failed")
+    end
   end
 end
 
+--- Start a program on several workers at once and return immediately.
+--- /run waits for one worker to finish before the prompt comes back, and
+--- `all` asks Claude once per worker and runs them one after another, so
+--- neither can put a fleet to work at the same time. Output and the final
+--- result come back through handleStray, prefixed with the worker's id.
+function M.launch(src, ids, name)
+  local sent = {}
+  for _, id in ipairs(ids) do
+    jobSeq = jobSeq + 1
+    local w = workers[id] or {}
+    workers[id] = w
+    w.busy, w.last = name or ("j" .. jobSeq), "launched"
+    net.send(id, { t = "run", job = ("j%d"):format(jobSeq), src = src }, cfg.protocol)
+    sent[#sent + 1] = id
+  end
+  return sent
+end
+
+--- "all", "3", "3,7,9" -> sorted ids, or nil and why.
+function M.parseIds(spec, default)
+  if spec == nil or spec == "" then
+    return default and { default } or nil, "no worker selected"
+  end
+  if spec == "all" then
+    local ids = util.keys(workers)
+    if #ids == 0 then return nil, "no workers yet" end
+    return ids
+  end
+  local ids = {}
+  for part in spec:gmatch("[^,%s]+") do
+    local n = tonumber(part)
+    if not n then return nil, "not a worker id: " .. part end
+    ids[#ids + 1] = n
+  end
+  if #ids == 0 then return nil, "no worker ids given" end
+  return ids
+end
+
 net.onStray = function(id, msg) M.handleStray(id, msg) end
+
+--- For tests, which drive handleStray and launch without M.run.
+function M.configure(c) cfg = c end
 
 --------------------------------------------------------------- dispatch ---
 
@@ -192,12 +263,13 @@ local HELP = {
   "/again            re-run it (no API call)",
   "/save <name>      save it",
   "/run <name> [id]  send a saved program (no API call)",
+  "/launch <name> all|id,id  start it on many at once",
   "/register <name>  make a saved program callable by Claude",
   "/expose <n> on|off   show or hide it in the prompt",
   "/unregister <n>   revoke it",
   "/check <name>     lint a saved program without registering",
   "/jobs [name]      list saved programs, or describe one",
-  "/stop [id]        abort a running job",
+  "/stop [id|all]    abort a running job",
   "/manifest         the API workers are given, and its token cost",
   "/notes <text>     house rules appended to the system prompt",
   "/model [id]       show or change the model",
@@ -225,9 +297,12 @@ local function command(input)
     if not next(workers) then console.dim("no workers yet") end
     for _, id in ipairs(util.keys(workers)) do
       local w = workers[id]
+      local what = w.busy
+        and ("[" .. tostring(w.busy) .. "] " .. tostring(w.last or ""))
+        or ((w.situation or ""):match("^[^\n]*") or "")
       console.dim(("%s%-4s %-14s %s"):format(
         tonumber(id) == target and "*" or " ", tostring(id),
-        w.label or "?", (w.situation or ""):match("^[^\n]*") or ""))
+        w.label or "?", what))
     end
 
   elseif cmd == "use" then
@@ -276,6 +351,20 @@ local function command(input)
       console.status(("sending %s to worker %d"):format(name, id))
       local r = remoteRun(id)(src, { onOutput = function(k, t) console.say(t) end })
       if r.ok then console.head("done") else console.err(tostring(r.error)) end
+    end
+
+  elseif cmd == "launch" then
+    local name, spec = rest:match("^(%S+)%s*(.-)%s*$")
+    local src = name and jobs.load(name)
+    local ids, err = M.parseIds(spec, target)
+    if not src then console.err("no saved job called " .. tostring(name))
+    elseif not ids then console.warn(err .. "  (usage: /launch <name> all|id,id)")
+    else
+      local sent = M.launch(src, ids, name)
+      local list = {}
+      for i, id in ipairs(sent) do list[i] = tostring(id) end
+      console.head(("%s -> %s"):format(name, table.concat(list, ",")))
+      console.dim("/who for status, /stop all to recall the lot")
     end
 
   elseif cmd == "jobs" then
@@ -339,8 +428,12 @@ local function command(input)
     end
 
   elseif cmd == "stop" then
-    local id = tonumber(rest) or target
-    if id then net.send(id, { t = "abort" }, cfg.protocol); console.warn("abort sent to " .. id) end
+    local ids, err = M.parseIds(rest, target)
+    if not ids then console.warn(err)
+    else
+      for _, id in ipairs(ids) do net.send(id, { t = "abort" }, cfg.protocol) end
+      console.warn("abort sent to " .. table.concat(ids, ","))
+    end
 
   elseif cmd == "notes" then
     if rest == "" then console.dim(cfg.operatorNotes or "(none)")
