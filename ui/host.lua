@@ -39,6 +39,13 @@ local workers = {}     -- id -> { label, caps, situation, session, lastSeen }
 local target  = nil    -- currently addressed worker id
 local jobSeq  = 0
 
+-- The fleet board (agent/fleet.lua): the latest facts each worker posted,
+-- and who holds each claimed piece of work. The host is the only place
+-- these are decided, which is what makes a claim safe: it handles one
+-- message at a time, so two workers can never both be granted a name.
+local fleetBoard  = {}   -- [id] = { label=, facts = {key=value} }
+local fleetClaims = {}   -- [name] = id
+
 --------------------------------------------------------------- plumbing ---
 
 local function events()
@@ -102,6 +109,11 @@ local function remoteRun(id)
             ok = msg.ok, error = msg.error, output = msg.output,
             result = msg.result, aborted = msg.aborted, elapsed = msg.elapsed,
           }
+        elseif msg.t ~= "result" then
+          -- A running program's fleet traffic (claims, posts) comes from
+          -- the very worker this loop is pumping; dropping it here left
+          -- its claims unanswered until they timed out.
+          M.handleStray(from, msg)
         end
       elseif from and msg then
         M.handleStray(from, msg)
@@ -135,7 +147,52 @@ local function sessionFor(id)
   return w.session
 end
 
+--- Send a fleet message to every worker but one.
+local function relay(except, msg)
+  for wid in pairs(workers) do
+    if wid ~= except then net.send(wid, msg, cfg.protocol) end
+  end
+end
+
+--- Everything a worker needs to join a fleet already in progress.
+function M.fleetSnapshot()
+  return { t = "fleet", kind = "snapshot", board = fleetBoard, claims = fleetClaims }
+end
+
+function M.fleetState() return fleetBoard, fleetClaims end
+
+function M.fleetReset() fleetBoard, fleetClaims = {}, {} end
+
+local function handleFleet(id, msg)
+  local label = workers[id] and workers[id].label
+  if msg.t == "post" then
+    local e = fleetBoard[id] or { facts = {} }
+    fleetBoard[id] = e
+    e.label = label
+    e.facts[tostring(msg.key)] = msg.value
+    relay(id, { t = "fleet", kind = "post", from = id, label = label,
+                key = msg.key, value = msg.value })
+  elseif msg.t == "claim" then
+    local name = tostring(msg.name)
+    local holder = fleetClaims[name]
+    local ok = holder == nil or holder == id
+    if ok then fleetClaims[name] = id; holder = id end
+    net.send(id, { t = "claimed", req = msg.req, name = name, ok = ok,
+                   holder = holder }, cfg.protocol)
+    if ok then relay(id, { t = "fleet", kind = "claim", name = name, holder = id }) end
+  elseif msg.t == "release" then
+    local name = tostring(msg.name)
+    if fleetClaims[name] == id then
+      fleetClaims[name] = nil
+      relay(id, { t = "fleet", kind = "release", name = name, holder = id })
+    end
+  end
+end
+
 function M.handleStray(id, msg)
+  if msg.t == "post" or msg.t == "claim" or msg.t == "release" then
+    return handleFleet(id, msg)
+  end
   if busyWith[id] and (msg.t == "output" or msg.t == "result") then
     return   -- remoteRun owns this worker's stream right now
   end
@@ -151,6 +208,7 @@ function M.handleStray(id, msg)
       target = target or id
       net.send(id, { t = "ack", text = "host " .. os.getComputerID() .. " here" },
                cfg.protocol)
+      net.send(id, M.fleetSnapshot(), cfg.protocol)
     end
   elseif msg.t == "ask" then
     console.head(("worker %d asks: %s"):format(id, tostring(msg.text)))
@@ -202,6 +260,9 @@ function M.launch(src, ids, name)
     local w = workers[id] or {}
     workers[id] = w
     w.busy, w.last = name or ("j" .. jobSeq), "launched"
+    -- So a probe launched into a fleet already at work starts out knowing
+    -- what the others have claimed.
+    net.send(id, M.fleetSnapshot(), cfg.protocol)
     net.send(id, { t = "run", job = ("j%d"):format(jobSeq), src = src }, cfg.protocol)
     sent[#sent + 1] = id
   end
@@ -272,7 +333,8 @@ local HELP = {
   "/jobs [name]      list saved programs, or describe one",
   "/stop [id|all]    abort a running job",
   "/share [id]       save, then post, a worker's last run",
-  "/forget [id|all]  worker restarts its map where it stands",
+  "/forget [id|all] [x,y,z]  restart a worker's map here",
+  "/fleet [reset]    what workers posted and claimed",
   "/manifest         the API workers are given, and its token cost",
   "/notes <text>     house rules appended to the system prompt",
   "/model [id]       show or change the model",
@@ -374,12 +436,57 @@ local function command(input)
     end
 
   elseif cmd == "forget" then
-    local ids, err = M.parseIds(rest, target)
+    -- "/forget 2 1,0,0": worker 2 stands at 1,0,0 of a shared frame,
+    -- facing "north". Probes placed in a row, all facing the same way and
+    -- each told its offset, then agree on what a position means -- which
+    -- is what makes the positions they post to the fleet comparable.
+    local spec, at = rest:match("^(%S*)%s*(%S*)$")
+    local origin
+    if at and at ~= "" then
+      local x, y, z = at:match("^(%-?%d+),(%-?%d+),(%-?%d+)$")
+      if not x then console.warn("position is x,y,z, e.g. 2,0,0"); return true end
+      origin = { x = tonumber(x), y = tonumber(y), z = tonumber(z) }
+    end
+    local ids, err = M.parseIds(spec, target)
     if not ids then console.warn(err)
+    elseif origin and #ids > 1 then
+      console.warn("one worker per position: /forget <id> x,y,z")
     else
-      for _, id in ipairs(ids) do net.send(id, { t = "forget" }, cfg.protocol) end
+      for _, id in ipairs(ids) do
+        net.send(id, { t = "forget", origin = origin }, cfg.protocol)
+      end
       console.warn("forget sent to " .. table.concat(ids, ","))
-      console.dim("each now treats its spot as 0,0,0")
+      console.dim(origin and ("it now stands at " .. at .. ", facing north")
+                         or "each now treats its spot as 0,0,0")
+    end
+
+  elseif cmd == "fleet" then
+    if rest == "reset" then
+      M.fleetReset()
+      for wid in pairs(workers) do net.send(wid, M.fleetSnapshot(), cfg.protocol) end
+      console.head("fleet board and claims cleared")
+    else
+      local any = false
+      for _, id in ipairs(util.keys(fleetBoard)) do
+        any = true
+        local e = fleetBoard[id]
+        local bits = {}
+        for _, k in ipairs(util.keys(e.facts)) do
+          local v = e.facts[k]
+          if type(v) == "table" and v.x then
+            v = ("%s,%s,%s"):format(tostring(v.x), tostring(v.y), tostring(v.z))
+          elseif type(v) == "table" then v = "{...}" end
+          bits[#bits + 1] = k .. "=" .. tostring(v)
+        end
+        console.dim(("%-4s %s"):format(tostring(id), table.concat(bits, " ")))
+      end
+      local per = {}
+      for _, holder in pairs(fleetClaims) do per[holder] = (per[holder] or 0) + 1 end
+      for _, id in ipairs(util.keys(per)) do
+        any = true
+        console.dim(("%-4s holds %d claim(s)"):format(tostring(id), per[id]))
+      end
+      if not any then console.dim("nothing posted or claimed yet") end
     end
 
   elseif cmd == "share" then

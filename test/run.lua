@@ -2060,9 +2060,10 @@ do
   ok(host.parseIds("3,x") == nil, "a typo is refused rather than skipped")
 
   local went = host.launch("job.say('hi')", { 3, 7 }, "probe")
-  ok(#went == 2 and #sent == 2, "launch sends to every worker", #sent)
-  ok(sent[1].msg.t == "run" and sent[2].msg.t == "run" and
-     sent[1].msg.job ~= sent[2].msg.job,
+  local runs = {}
+  for _, e in ipairs(sent) do if e.msg.t == "run" then runs[#runs + 1] = e end end
+  ok(#went == 2 and #runs == 2, "launch sends to every worker", #runs)
+  ok(runs[1].id ~= runs[2].id and runs[1].msg.job ~= runs[2].msg.job,
      "each as its own job, without waiting for the first")
 
   host.handleStray(3, { t = "output", kind = "say", text = "found 2 shards" })
@@ -2078,6 +2079,100 @@ do
   ok(done, "and so is its result, which nothing else is waiting for")
 
   for k, f in pairs(saved) do console[k] = f end
+  _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
+end
+
+--------------------------------------------------------------------------
+group("fleet: probes split work through the host")
+
+-- Three probes told to "fan out" need one thing a board of positions
+-- cannot give them: a way for two of them not to pick the same wing at
+-- the same moment. The host handles one message at a time, so a claim it
+-- grants is granted to exactly one worker.
+do
+  local fleet = require("agent.fleet")
+  fleet.reset()
+  fleet.link = nil
+  ok(fleet.claim("north wing") == true, "with no host every claim succeeds")
+  fleet.post("pos", { x = 1, y = 0, z = 2 })
+  local b = fleet.board()
+  ok(b[fleet.id()] and b[fleet.id()].pos.x == 1,
+     "and the board still shows your own posts")
+  ok(not fleet.connected(), "and says it is working alone")
+
+  local toWorker = {}          -- [id] = list of messages the host sent it
+  local prevRednet, prevTest, prevId = _G.rednet, _G._TEST, os.getComputerID
+  _G.rednet = {
+    send = function(id, msg)
+      toWorker[id] = toWorker[id] or {}
+      table.insert(toWorker[id], msg)
+      if id == 3 then fleet.deliver(msg) end   -- worker 3 is "us"
+    end,
+    broadcast = function() end, receive = function() return nil end,
+  }
+  _G._TEST = true
+  os.getComputerID = prevId or function() return 1 end
+  local host = require("ui.host")
+  host.configure({ protocol = "ccagent" })
+  local console = require("ui.console")
+  local saved = {}
+  for _, k in ipairs({ "say", "warn", "err", "head", "dim" }) do
+    saved[k] = console[k]; console[k] = function() end
+  end
+  host.fleetReset()
+  fleet.reset()
+  host.handleStray(3, { t = "hello", label = "probe-1" })
+  host.handleStray(7, { t = "hello", label = "probe-2" })
+  fleet.link = { id = 3, label = "probe-1",
+                 send = function(m) host.handleStray(3, m); return true end }
+  toWorker = {}
+
+  host.handleStray(7, { t = "claim", name = "cell 1,1", req = "7:1" })
+  local reply = toWorker[7] and toWorker[7][1]
+  ok(reply and reply.t == "claimed" and reply.ok, "a free name is granted")
+
+  local got, holder = fleet.claim("cell 1,1")
+  ok(got == false and holder == 7, "and refused to the next asker, naming the holder",
+     tostring(got) .. " " .. tostring(holder))
+  got = fleet.claim("cell 1,2")
+  ok(got == true, "while a different name is still free")
+  ok(fleet.claim("cell 1,2") == true, "and claiming your own again is fine")
+
+  local relayed
+  for _, m in ipairs(toWorker[7]) do
+    if m.t == "fleet" and m.kind == "claim" and m.name == "cell 1,2" then relayed = m end
+  end
+  ok(relayed and relayed.holder == 3, "the others hear who took it")
+
+  fleet.post("pos", { x = 4, y = 0, z = 9 })
+  local post
+  for _, m in ipairs(toWorker[7]) do
+    if m.t == "fleet" and m.kind == "post" then post = m end
+  end
+  ok(post and post.from == 3 and post.value.z == 9, "a post is relayed to the others")
+  local hb = host.fleetState()
+  ok(hb[3] and hb[3].facts.pos.x == 4, "and kept on the host for /fleet")
+
+  host.handleStray(7, { t = "post", key = "done", value = 2 })
+  ok(fleet.board()[7] and fleet.board()[7].done == 2,
+     "and a post from another worker reaches this one")
+
+  fleet.release("cell 1,2")
+  local _, hc = host.fleetState()
+  ok(hc["cell 1,2"] == nil and hc["cell 1,1"] == 7,
+     "release frees only what the releaser held")
+
+  host.launch("job.say('x')", { 3 }, "scout")
+  ok(fleet.claims()["cell 1,1"] == 7,
+     "a launched probe starts out knowing the claims already made")
+
+  -- What lets the model use it at all.
+  local man = agent.registry.manifest()
+  ok(man:find("fleet.claim(", 1, true) ~= nil, "fleet.claim is in the manifest")
+
+  for k, f in pairs(saved) do console[k] = f end
+  fleet.link = nil
+  fleet.reset()
   _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
 end
 

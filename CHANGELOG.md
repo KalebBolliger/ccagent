@@ -8,6 +8,29 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- `fleet`, a capability for turtles splitting one job: `fleet.claim(name)`
+  takes a named piece of work through the host, which grants each name to
+  exactly one worker because it handles one message at a time;
+  `fleet.post`/`fleet.board` share small facts such as positions; and
+  `fleet.release` gives back what could not be finished. Before this a
+  program could only print -- `rednet` is not in the sandbox, so probes
+  told to "fan out" had no way to know what the others were doing. With
+  no host, every claim succeeds and a fleet program runs alone unchanged.
+  `/fleet [reset]` on the host shows or clears the board and claims, and
+  a launched or newly joined worker is sent the current state.
+
+  Adds a namespace to the manifest, so the cached system prompt is
+  rebuilt once on first use after updating.
+
+- `/forget <id> x,y,z` on the host puts a worker at that position of a
+  shared frame, facing "north". Probes without GPS placed in a row and
+  given their offsets then agree on coordinates, which is what makes the
+  positions they post comparable.
+
+- The host's blocking run loop (`@id`, `/run`) now passes a worker's
+  other traffic to the stray handler instead of dropping it, so a
+  program's claims are answered while the host waits on it.
+
 - `/launch <name> all|id,id` on the host starts a saved program on several
   workers at once and returns the prompt straight away. Before this a
   fleet could not work in parallel: `all` asks Claude once per worker and

@@ -119,6 +119,28 @@ A launched job is not waited on, so it has no time limit on the host;
 and a trail of where it believed it was while it ran — and saves it to
 `/ccagent/reports/w3.txt` on the host before offering to post it.
 
+### Turtles that split a job between them
+
+A program on a worker can coordinate with the others through `fleet`, with
+the host as switchboard:
+
+```lua
+if fleet.claim("cell 2,5") then ... end   -- the host grants each name once
+fleet.post("pos", nav.pos())              -- relayed to every other worker
+fleet.board()[7].pos                      -- what worker 7 last posted
+```
+
+A claim is the safe way to divide work: two probes reading the board and
+both deciding nobody has the north wing is a race, two probes *claiming* it
+is not. `/fleet` on the host shows what was posted and who holds what;
+`/fleet reset` clears both before a new expedition. On the standalone
+controller every claim succeeds, so the same program runs as a fleet of one.
+
+Positions are only comparable if the turtles share a frame. With GPS they
+do. Without it, place them facing the same way and give each its offset
+from the host: `/forget 1 0,0,0`, `/forget 2 1,0,0`, `/forget 3 2,0,0` —
+"north" is then the way they all face, and x increases to their right.
+
 **Moved a turtle without GPS?** Run `/forget` on it (or `/forget 3` from
 the host). Without GPS a turtle boots into the position it last stored,
 because nothing tells it that it was carried; until you reset it, it
@@ -478,8 +500,8 @@ about stack depth:
 `nav` movement and pathfinding · `block` inspect/dig/place/attack in any of ten
 direction words · `inv` inventory as a query · `world` persistent block memory ·
 `geom` coordinate math · `job` operator I/O and reboot-safe checkpoints · `lib`
-your own registered routines · `caps` capability guards · `helper` odds and
-ends.
+your own registered routines · `caps` capability guards · `fleet` splitting
+work with other turtles on the same host · `helper` odds and ends.
 
 `/manifest` prints the current list with signatures. A few of the calls that do
 the most work:
@@ -709,7 +731,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 740
+`lua5.3 test/all.lua` runs the three suites against a mock world — 754
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

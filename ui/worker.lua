@@ -91,9 +91,15 @@ end
 --- turtle was carried somewhere: it boots believing it is still where it
 --- last stood, with that place's block memory and home, and nothing in
 --- the game tells it otherwise. Same as the controller's /forget.
-local function forget()
+---
+--- With an origin, the spot becomes that coordinate (still facing
+--- "north", i.e. the way the turtle faces now). That is how probes placed
+--- side by side get one shared frame: /forget each at its offset, all
+--- facing the same way, and their positions mean the same thing.
+local function forget(origin)
   agent.world.clear()
   agent.state.clear()
+  if origin then agent.nav.localFrame(origin, agent.geom.NORTH) end
   agent.boot()
 end
 
@@ -148,6 +154,8 @@ local function runProgram(msg)
         elseif m.t == "run" then
           net.send(id, { t = "result", job = m.job, ok = false,
                          error = "busy with job " .. tostring(msg.job) }, cfg.protocol)
+        elseif m.t == "fleet" or m.t == "claimed" then
+          agent.fleet.deliver(m)
         elseif m.t == "forget" then
           net.send(id, { t = "output", kind = "warn", job = msg.job,
                          text = "busy; /stop first, then /forget" }, cfg.protocol)
@@ -202,9 +210,11 @@ local function listen()
       elseif msg.t == "report" then
         hostId = id
         net.send(id, { t = "report", text = report(nil) }, cfg.protocol)
+      elseif msg.t == "fleet" or msg.t == "claimed" then
+        agent.fleet.deliver(msg)
       elseif msg.t == "forget" then
         hostId = id
-        forget()
+        forget(msg.origin)
         console.head("pose and memory cleared (host)")
         local d = describe(); d.t = "state"
         net.send(id, d, cfg.protocol)
@@ -272,6 +282,15 @@ function M.run()
   end
 
   hostId = findHost()
+  -- Programs reach the host only through agent.fleet; this is its wire.
+  agent.fleet.link = {
+    id = os.getComputerID(), label = describeLabel(),
+    connected = function() return hostId ~= nil end,
+    send = function(m)
+      if not hostId then return false end
+      return net.send(hostId, m, cfg.protocol)
+    end,
+  }
   console.info(agent.situation())
   if agent.nav.frame() == "local" then
     console.warn("no GPS: position kept from last boot")

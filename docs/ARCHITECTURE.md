@@ -90,6 +90,12 @@ automatically — it's a manual checklist, which is exactly the kind of thing
 that erodes over time. Consider that a warning sign if a change is adding
 mutable module state at all.
 
+One deliberate exception: `agent/fleet.lua` holds the board, the claims and
+the host link at module level and `lib.run` does **not** snapshot them. They
+are a record of what other machines said, not a setting a routine can leave
+wrong for its caller; a nested routine claiming work claims it for the same
+turtle, which is the behaviour wanted.
+
 ## `frame`: what it checks and — importantly — what it doesn't
 
 This was wrong in 1.1.0 and fixed in 1.1.1 (see `CHANGELOG.md`), and it's

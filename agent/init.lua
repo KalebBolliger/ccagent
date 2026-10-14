@@ -23,6 +23,7 @@ local registry = require("agent.registry")
 local contract = require("agent.contract")
 local lint     = require("agent.lint")
 local lib      = require("agent.lib")
+local fleet    = require("agent.fleet")
 
 local agent = {}
 
@@ -31,6 +32,7 @@ agent.caps, agent.world, agent.nav     = caps, world, nav
 agent.inv,  agent.block, agent.job     = inv, block, job
 agent.registry, agent.lib              = registry, lib
 agent.contract, agent.lint             = contract, lint
+agent.fleet                            = fleet
 
 agent.VERSION = "1.2.0"
 
@@ -247,6 +249,17 @@ registry.add("job", job, "talk to the operator; survive reboots", {
   { fn = "sleep",      sig = "(n)",                         doc = "abort-aware sleep" },
   { fn = "checkpoint", sig = "(key, value)",                doc = "persist across reboot" },
   { fn = "recall",     sig = "(key, default?) -> value" },
+})
+
+registry.add("fleet", fleet, "split work with other turtles on the same host", {
+  { fn = "claim",     sig = "(name) -> ok, holderId",
+    doc = "take a named piece of work (e.g. 'cell 2,5'); false + holder if another turtle has it. The host grants each name once, so claim BEFORE starting work rather than checking the board. Always true with no host. nil, err if the host did not answer" },
+  { fn = "release",   sig = "(name)",              doc = "give back work you could not finish so another turtle can take it" },
+  { fn = "claims",    sig = "() -> {name=id}",     doc = "who holds what" },
+  { fn = "post",      sig = "(key, value)",        doc = "tell the other turtles a small fact (string/number/small table); latest per key wins. e.g. post('pos', nav.pos())" },
+  { fn = "board",     sig = "() -> {[id]={label,age,<key>=value}}", doc = "what every turtle last posted, you included; age in seconds" },
+  { fn = "id",        sig = "() -> n",             doc = "this turtle's id, as used in board and claims" },
+  { fn = "connected", sig = "() -> bool",          doc = "a host is relaying; false means you are working alone" },
 })
 
 registry.add("lib", lib, "saved routines, callable by name", {

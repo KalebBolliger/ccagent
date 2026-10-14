@@ -28,6 +28,7 @@ agent/registry.lua
 agent/contract.lua
 agent/lint.lua
 agent/lib.lua
+agent/fleet.lua
 agent/init.lua
 
 claude/client.lua
