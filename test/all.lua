@@ -6,6 +6,13 @@
 --------------------------------------------------------------------------]]
 
 local suites = { "test/run.lua", "test/run_lib.lua", "test/run_install.lua" }
+
+-- The child processes run under the SAME interpreter as this one. It used
+-- to say "lua5.3" outright, which meant `lua5.1 test/all.lua` reported on
+-- 5.3 and said nothing about 5.1 -- a check answering about an
+-- interpreter nobody asked it about. arg[-1] is the interpreter the
+-- script was launched with in both 5.1 and 5.3.
+local interp = (arg and arg[-1]) or "lua5.3"
 local failed = 0
 local total = 0
 
@@ -13,7 +20,7 @@ for _, s in ipairs(suites) do
   print(("\n===== %s ====="):format(s))
   -- Read the child's output as well as its status: the per-suite counts
   -- are the only place the real total exists, and the docs quote it.
-  local pipe = io.popen("lua5.3 " .. s .. " 2>&1")
+  local pipe = io.popen(interp .. " " .. s .. " 2>&1")
   local out = pipe:read("*a")
   local ok, _, code = pipe:close()
   io.write(out)

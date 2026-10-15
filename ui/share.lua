@@ -52,15 +52,21 @@ local function tailFile(path, n)
   for i = #lines - n + 1, #lines do out[#out + 1] = lines[i] end
   return table.concat(out, "\n")
 end
+share.tail = tailFile
 
 --- Everything worth knowing about the last run, as one blob of text.
----   parts { version, settings, situation, request, code, result, log }
+---   parts { version, origin, settings, situation, request, code, result,
+---           trail, log }
 --- Every field is optional; a bundle of what is known beats none.
 function share.bundle(parts)
   parts = parts or {}
   local out = {}
   out[#out + 1] = "ccagent report"
   if parts.version then out[#out + 1] = "version: " .. tostring(parts.version) end
+  -- Which copy of the library this was. A version number cannot tell two
+  -- branches apart, so without this a report from a feature branch reads
+  -- as a report from main and sends the reader to the wrong source.
+  if parts.origin then out[#out + 1] = "origin: " .. tostring(parts.origin) end
   if parts.settings then out[#out + 1] = "settings: " .. tostring(parts.settings) end
 
   if parts.situation then
@@ -86,11 +92,19 @@ function share.bundle(parts)
   if r then
     local head = r.ok and "ok" or ("failed: " .. tostring(r.error or "?"))
     if r.aborted then head = "aborted" end
+    if r.running then head = "still running (output so far)" end
     out[#out + 1] = rule("result") .. head
     if r.elapsed then out[#out + 1] = ("elapsed: %ss"):format(tostring(r.elapsed)) end
     if r.output and r.output ~= "" then
       out[#out + 1] = rule("output") .. tostring(r.output)
     end
+  end
+
+  -- Where the turtle believed it was, sampled while the job ran. A
+  -- program's own output says what it meant to do; this says what the
+  -- turtle did, which is the half you need when it goes round in circles.
+  if parts.trail and parts.trail ~= "" then
+    out[#out + 1] = rule("trail") .. tostring(parts.trail)
   end
 
   if parts.log and parts.log ~= "" then
@@ -118,6 +132,7 @@ function share.gather(ctx)
   local sharingJob = ctx.job ~= nil
   return share.bundle({
     version   = ctx.version,
+    origin    = ctx.origin,
     settings  = ctx.settings,
     situation = ctx.situation,
     job       = ctx.job,

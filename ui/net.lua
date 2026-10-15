@@ -4,13 +4,16 @@
   Worker -> host
     {t="hello",  caps=<flags>, situation=<string>, label=<string>}
     {t="state",  situation=<string>, caps=<flags>}
+    {t="state",  busy=<job id>, last=<string>, label=}   -- poll mid-job
     {t="output", kind=, text=, job=}
     {t="result", job=, ok=, error=, output=, result=, elapsed=}
+                                          -- error "busy with job <id>" when
+                                          -- a run arrives mid-job
     {t="ask",    text=<string>}          -- request typed at the turtle
 
   Host -> worker
     {t="run",    job=<id>, src=<lua>}
-    {t="abort"}
+    {t="abort"}                           -- heard mid-job, too
     {t="poll"}                            -- please send state
     {t="ack",    text=<string>}
 --------------------------------------------------------------------------]]
@@ -53,6 +56,30 @@ function net.receive(timeout, protocol)
   local id, msg = rednet.receive(protocol or net.protocol, timeout)
   if type(msg) ~= "table" or not msg.t then return nil end
   return id, msg
+end
+
+-- rednet's channel numbers (rom/apis/rednet.lua). Read from the API when
+-- it is there; the literals are its values, for tests.
+net.CHANNEL_REPEAT    = (_G.rednet and rednet.CHANNEL_REPEAT) or 65533
+net.CHANNEL_BROADCAST = (_G.rednet and rednet.CHANNEL_BROADCAST) or 65535
+net.MAX_ID_CHANNELS   = (_G.rednet and rednet.MAX_ID_CHANNELS) or 65500
+
+--- What a relay should do with one modem message: the channel to send it
+--- on to, or nil to leave it. Mirrors CC's rom/programs/rednet/repeat.lua:
+--- only rednet packets heard on the repeat channel, each message id once
+--- (remembered 30s in `seen`, which this prunes). The caller transmits on
+--- the returned channel and on the repeat channel, for further relays.
+function net.repeatTarget(channel, m, seen, now)
+  for k, expiry in pairs(seen) do
+    if expiry < now then seen[k] = nil end
+  end
+  if channel ~= net.CHANNEL_REPEAT or type(m) ~= "table" then return nil end
+  if not m.nMessageID or type(m.nRecipient) ~= "number" then return nil end
+  if seen[m.nMessageID] then return nil end
+  seen[m.nMessageID] = now + 30000
+  local to = m.nRecipient
+  if to ~= net.CHANNEL_BROADCAST then to = to % net.MAX_ID_CHANNELS end
+  return to
 end
 
 --- Wait for a specific message type from a specific sender.

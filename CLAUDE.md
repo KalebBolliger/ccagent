@@ -18,7 +18,7 @@ core. Full picture: `README.md`.
 lua5.3 test/all.lua
 ```
 
-667 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
+825 assertions against a mocked CC:Tweaked world (`test/mock.lua`), in well
 under a second, with no Minecraft required. If you touched `agent/` or
 `claude/`, run it before saying you're finished, not just when something
 seems wrong.
@@ -52,10 +52,28 @@ is CC:Tweaked's bundled Lua (Cobalt — roughly 5.1, with some later
 backports), which is stricter on the things people don't expect: no
 `table.unpack` (there's a shim, `util.unpack = table.unpack or unpack` —
 use it, don't add a second one), no `//`, no bitwise operators, no `goto`
-in older builds, no `utf8` library. Passing `test/all.lua` does not by
-itself prove new code will run in-game if it leans on a 5.2/5.3-only
-feature. When in doubt, write it the way the rest of the codebase already
-does — nothing here currently relies on anything past 5.1.
+in older builds, no `utf8` library. When in doubt, write it the way the
+rest of the codebase already does — nothing here currently relies on
+anything past 5.1.
+
+Two narrow checks now stand behind that, and it is worth knowing why they
+are narrow. **Running the suite under `lua5.1` does not work and is not a
+missing feature.** Cobalt is 5.1 *plus* backports, so plain 5.1 is
+stricter than the target in exactly the place this codebase lives: it
+rejects `load(src, name, "t", env)`, the four-argument form the sandbox
+depends on, while CC:Tweaked's own rom uses that form throughout and
+contains no `setfenv` at all. A check that fails on code the game runs
+happily is a check that gets ignored. So instead:
+
+- `luac5.1 -p` over every tracked file, in CI — the closest available
+  parser to Cobalt's grammar, which catches `//`, bitwise operators and
+  `goto` while only rejecting what Cobalt also rejects.
+- a library-surface check in `test/run_install.lua` — `table.unpack` and
+  `utf8` in anything listed in `manifest.txt`, with comments and strings
+  blanked by `lint.strip` first so prose about the trap is not the trap.
+
+Neither proves a change runs in-game. They close the two gaps that are
+mechanically closable.
 
 ## Map
 
@@ -109,13 +127,20 @@ which is just as public and much harder to correct later.
 Commit trailers are subject to all of the above: `Co-Authored-By:` is fine,
 a session or conversation URL is not.
 
-Before pushing anything new here, and always before making history public:
+Run this **after committing and before pushing**, and always before
+making history public. Running it before `git commit` — easy to do when
+both are in one command — checks everything except the message you are
+about to add, which is the one thing that has not been checked yet:
 
 ```
 git log --format='%an <%ae>%n%B' | grep -niE 'session_|claude\.ai/code|@[a-z0-9.-]+\.[a-z]{2,}'
 ```
 
-Nothing should come back but `noreply@anthropic.com`.
+Nothing should come back but `noreply@anthropic.com`. CI runs the same
+thing, split so that an author line may carry a forge privacy alias and a
+message body may not — and the first commit it caught was one whose
+message spelled such an alias out as an example. An address-shaped
+literal belongs in a file, not in a commit message.
 
 ## Habits specific to this repo
 
@@ -228,6 +253,24 @@ Nothing should come back but `noreply@anthropic.com`.
   `turtle.getEquippedLeft/Right` cost one call and cannot be out of date.
   Keep the lists for *preference* (burn coal before planks) and let the
   game decide *membership*.
+- **A static check that refuses to run something needs its false
+  positives enumerated, and its ground truth asked rather than listed.**
+  `lint.globals` reported `placed = 0; placed = placed + 1` as a name not
+  in the sandbox -- the read on the right of the second line, since only
+  assignment *targets* were skipped. Harmless while the check only
+  printed advice at registration time; the moment anything gated on it,
+  it would have refused the most ordinary program in Lua. The companion
+  mistake is the allowed-name list: `agent/lib.lua` keeps one for
+  routines, and a list drifts from the sandbox silently in the direction
+  that matters, since a name the sandbox dropped stays "allowed". The
+  one-off gate therefore asks `claude/executor.lua` for the live surface
+  (`globalNames`/`globalTables`), which also means the answer is the one
+  the machine running the program would give -- `table.unpack` is present
+  under lua5.3 and absent under Cobalt. If you add a check that can stop
+  a program, write out each exemption and the real case behind it, the
+  way the `unknown-member` check does for `turtle` (its surface is
+  dynamic: `turtle.craft` appears only once a crafting table is
+  equipped).
 - A new file under `agent/`, `claude/` or `ui/` has to be added to
   `manifest.txt` as well, or turtles installed over the wire will not get
   it. `test/run_install.lua` catches this; `lua5.3 test/all.lua` is the only

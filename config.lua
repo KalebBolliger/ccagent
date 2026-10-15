@@ -67,6 +67,12 @@ return {
 
   protocol = "ccagent",              -- rednet protocol for host/worker mode
   hostname = "ccagent-host",
+  -- hostModem = "ender",            -- on the host, if it has an ender modem:
+                                     -- workers then know range is no concern
+                                     -- (the game cannot tell a program which
+                                     -- kind of modem a computer has)
+  -- heartbeat  = 10,                -- seconds between host heartbeats
+  -- claimLease = 300,               -- seconds a silent worker keeps claims
 
   logLevel = "info",                 -- debug | info | warn | error
 }

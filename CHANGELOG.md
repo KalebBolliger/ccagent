@@ -8,6 +8,320 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- A work pool for any number of probes (`agent/pool.lua`).
+  `fleet.offer(name, data)` adds work -- repeats ignored, so every probe
+  may offer the same list -- and `fleet.take()` hands out the best open
+  piece: highest `data.priority`, then nearest to the taker, then oldest.
+  Released work returns to open with its data, so pieces found mid-run
+  can be offered and picked up by whoever is closest. Programs no longer
+  need to know how many probes there are or race each other through
+  `fleet.claim`. The same rules run on the host, in each worker's cache,
+  and alone on a controller, so a fleet program runs unchanged on one.
+
+- Messages: `fleet.send(id or "all", topic, body)`, `fleet.receive`,
+  `fleet.inbox`, and `/fleet tell <ids|all> <topic> [text]` from the
+  operator -- e.g. a `recall` that the fleet guidance tells programs to
+  check in their main loop.
+
+- Delivery that survives range. Everything a worker sends that changes
+  shared state or must be seen -- posts, offers, finishes, releases,
+  messages, output lines, the job result -- is numbered per boot and
+  applied by the host strictly in order; the heartbeat carries the host's
+  acknowledgements and the worker re-sends the rest. Messages to a worker
+  are queued on the host and re-sent until it acknowledges. Walking out of
+  range now delays news instead of losing it; only output is ever given
+  up (oldest first, after 300 entries), and the host reports how many
+  lines. Repeated posts of one key keep only the newest while waiting.
+
+- Relays. `/fleet relay <id> on|off` or `fleet.relay(true)` makes a
+  worker repeat rednet the way CC's `repeat` program does (each message
+  id once, both to its recipient and to further relays), and keeps it a
+  relay across reboots.
+
+- Fleet updates (posts, offers, claims) are broadcast once instead of
+  sent to each worker, so their cost does not grow with the fleet.
+  `/fleet work` lists every piece and who has it.
+
+- The host's fleet logic moved to `ui/switchboard.lua`, which takes its
+  I/O as functions. The test suite drives it with one real host and five
+  real workers over a simulated radio that loses what is out of range,
+  and checks that every cell is taken exactly once, that half the
+  transmissions can be lost with every message still arriving in order,
+  and that a restarted host still delivers what it had queued.
+
+- Contact between host and workers is measured. The host sends a
+  heartbeat every `heartbeat` seconds (10); each worker records when it
+  last heard the host, how far away it was -- CC reports a distance with
+  every wireless message, which `rednet.receive` discards, so the worker
+  reads the raw `modem_message` too -- and where it stood at the time.
+  `fleet.link()` gives a program all of that, the state line Claude
+  reads gains a `link:` line ("host heard 3s ago, 41 blocks away;
+  wireless: ~64 blocks below y=96" / "LOST 45s (last heard at ...)"),
+  and a claim made out of contact fails at once instead of waiting out
+  its five-second timeout. Range rules are from CC:Tweaked's
+  `WirelessModemPeripheral`/`WirelessNetwork`: 64 blocks below y=96
+  rising to 384 at build height, unlimited for an ender modem, and a
+  message arrives within the *larger* of the two ends' ranges -- so one
+  ender modem at the host is enough. A turtle's ender modem is
+  recognised by its item (`caps.has("enderModem")`); a computer's cannot
+  be, so set `hostModem = "ender"` in the host's config.
+
+- Claims end. `fleet.finish(name)` marks work done for good; anything
+  claimed and not finished goes back to the pool when the job ends, or
+  when the holder has not been heard for `claimLease` seconds (300). A
+  stuck or unloaded probe used to hold its cells forever. The host keeps
+  board and claims in `/.ccagent/fleet.dat`, so its own chunk unloading
+  no longer sends the next probe into a wing already searched; `/fleet
+  reset` clears it. `/fleet` shows each worker's active and finished
+  claims, when it was last heard, and how far away.
+
+- Programs the host writes carry a short WORKING IN A FLEET section in
+  the system prompt: claim before working, `nil` from a claim means out
+  of contact rather than taken, re-post because posts are lost out of
+  range, check the link before walking away. Only the host's prompt has
+  it -- the controller writes for a turtle working alone.
+
+  `heartbeat`, `claimLease` and `hostModem` are new config keys with
+  defaults, so existing installs get them without editing; `hostModem`
+  has to be set by hand on a host that has an ender modem.
+
+- `fleet`, a capability for turtles splitting one job: `fleet.claim(name)`
+  takes a named piece of work through the host, which grants each name to
+  exactly one worker because it handles one message at a time;
+  `fleet.post`/`fleet.board` share small facts such as positions; and
+  `fleet.release` gives back what could not be finished. Before this a
+  program could only print -- `rednet` is not in the sandbox, so probes
+  told to "fan out" had no way to know what the others were doing. With
+  no host, every claim succeeds and a fleet program runs alone unchanged.
+  `/fleet [reset]` on the host shows or clears the board and claims, and
+  a launched or newly joined worker is sent the current state.
+
+  Adds a namespace to the manifest, so the cached system prompt is
+  rebuilt once on first use after updating.
+
+- `/forget <id> x,y,z` on the host puts a worker at that position of a
+  shared frame, facing "north". Probes without GPS placed in a row and
+  given their offsets then agree on coordinates, which is what makes the
+  positions they post comparable.
+
+- `/launch <name> all|id,id` on the host starts a saved program on several
+  workers at once and returns the prompt straight away. Before this a
+  fleet could not work in parallel: `all` asks Claude once per worker and
+  runs them back to back, and `/run` holds the prompt until its one worker
+  finishes. A launched job's output arrives prefixed with the worker's id,
+  its result is printed when it lands, and `/who` shows each worker's job
+  and latest line. `/stop all` aborts the lot.
+
+- `/dry <request>` on the host, as on the controller: write a program for
+  the current worker without running it, so it can be read, `/save`d and
+  launched. Without it the only route to a saved program was running it
+  to completion on one worker first, with the host's prompt held the
+  whole time.
+
+- `/share [id]` on the host. It asks the worker for its report -- the
+  program it last ran, its output (so far, if still running), its state,
+  the log tail, and a **trail** of where it believed it was every couple
+  of seconds -- saves it to `/ccagent/reports/w<id>.txt` on the host,
+  and then offers to post it like the controller's `/share`. The trail
+  exists because a program's output says what it meant to do and a
+  turtle going round in circles needs the other half.
+
+- `/forget` on a worker, and `/forget [id|all]` on the host, as on the
+  controller. A worker without GPS now says so at boot.
+
+**Fixed**
+
+- The host acknowledged fleet messages it had not saved. Its state was
+  written on a ten-second timer while acknowledgements went out from
+  memory, so a host restarting in between had told workers to discard
+  messages it no longer had -- and then, waiting for them, refused every
+  later message from those workers for good. Duplicate output after a
+  restart was the visible half of the same gap. The heartbeat now saves
+  before it acknowledges; the file is written beside the old one and
+  moved into place (CC's `fs.move` refuses an existing destination, so
+  the old one is deleted first, and a load finds the new file if a
+  restart fell between the two); and every numbered message carries the
+  oldest number its sender still holds, so a receiver stuck below it
+  counts the gap as lost, says so, and carries on. The same number makes
+  a receiver with no count -- a rebooted worker, a host that lost its
+  file -- wait for the oldest message in flight instead of syncing to
+  whichever arrived first.
+
+- The host's run loop (`@id`, `/run`) no longer reads rednet while the
+  background listener is running; it waits on a sink that the listener's
+  dispatcher fills. With numbered messages two readers would not just
+  print twice -- whichever saw a message second would discard it as a
+  duplicate.
+
+- The host handled a busy worker's fleet traffic twice. rednet delivers
+  every message to every coroutine waiting for one, so with the
+  background listener running, the run loop forwarding the same message
+  to the stray handler answered claims twice and relayed posts twice --
+  and a forwarding path older than the fleet code printed other workers'
+  output twice while an `@id` job ran. An earlier entry here described
+  that forwarding as a fix for unanswered claims; it was not, since the
+  listener already saw those messages. Forwarding now happens only when
+  no listener is running.
+
+- Board ages restarted at zero whenever a worker received a snapshot,
+  so a probe silent for an hour looked as fresh as one that had just
+  posted. Snapshots now carry ages.
+
+- Without GPS, a turtle carried to a new spot boots into its *stored*
+  pose: it believes it is still where it last stood, facing the way it
+  last faced, with that place's block memory and home. `state.lua`
+  keeps the pose across a re-place on purpose (it is right after a
+  chunk reload, and indistinguishable from one), but a comment in
+  `agent.boot` claimed the opposite, and workers had no way to reset.
+  Run `/forget` on any GPS-less turtle that has been moved.
+
+- A worker running a job now still hears the host. Its listener was the
+  thing running the job, so `/stop` and `/poll` sent mid-job were never
+  read and a long job could only be stopped from the turtle's own
+  keyboard. The job now runs beside a small reader that honours `abort`,
+  answers `poll` with the job id and last output line (without probing the
+  turtle, which would interleave turtle calls with the job's), and refuses
+  a second `run` with `busy with job <id>` instead of dropping it.
+
+- CI parses every tracked `.lua` file under both `luac5.3` and `luac5.1`,
+  runs the suite, and greps the history for the things `CLAUDE.md`
+  forbids committing.
+
+  The parse sweep exists because the suite only loads what it requires:
+  both front ends, `ui/net`, the bootstrapper and the shipped config are
+  required by no test, so a syntax error in any of them passed the suite
+  and failed on a turtle. Running it under 5.1 as well is what catches
+  `//`, a bitwise operator or a `goto` before a turtle does.
+
+- A library-surface check for the deployment target, in
+  `test/run_install.lua`: nothing listed in `manifest.txt` may use
+  `table.unpack` (the documented `util.unpack` shim excepted) or `utf8`.
+  Comments and string literals are blanked with `lint.strip` first, so a
+  doc comment explaining the trap is not itself a finding.
+
+  This replaces running the whole suite under `lua5.1`, which was tried
+  first and does not work: Cobalt is 5.1 *plus* backports, so plain 5.1
+  is stricter than the real target in precisely the place this codebase
+  lives. It rejects `load(src, name, "t", env)` -- the four-argument form
+  the sandbox depends on -- while CC:Tweaked's own rom uses that form
+  throughout and contains no `setfenv` at all. A job that fails on code
+  the game runs happily is a job that gets ignored.
+
+- `/update <ref>` pulls a branch, and `ui/origin.lua` reads back the ref
+  `install.lua` stored so the machine can say which copy of the library
+  it is running. The ref sticks across later bare updates -- that is the
+  useful behaviour and the hazard, so `/doctor` always prints it, every
+  `/share` report carries it, and a turtle on anything but the default
+  says so unprompted. Not added to `agent.situation()`: that string is
+  written for the model, and which branch the library came from is not
+  something a generated program should reason about.
+
+  The ref is passed as `--ref`, never as a bare argument. `install.lua`
+  reads a bare `owner/name`-shaped word as a repository, and branch names
+  are shaped exactly like that, so the bare form would silently repoint
+  the source instead of changing the branch. A test now pins both halves
+  of that ambiguity.
+
+- A generated program is checked against the sandbox before it is allowed
+  to move. Lua resolves a name when the line runs, so a call to a function
+  that was never written starts, works, changes the world and only then
+  dies -- which is how `inv.fuel()`, a call that does not exist and never
+  did, reached a real turtle with the answer sitting in the API listing in
+  its own system prompt.
+
+  Two kinds are refused: a bare name that is not in the sandbox, and a
+  field on a namespace that is (`inv.fuel`, `string.frmat`). Both are
+  facts rather than predictions -- the table is there and the key is in it
+  or not -- which is why they are grounds for not running something, and
+  why nothing else the lint reports is. One repair round is spent
+  (`staticRepairs`, default 1) carrying the specific missing names; a
+  program that comes back still naming them is not run at all. A clean
+  program costs no extra request.
+
+  The surface is asked of the live sandbox via `executor.globalNames` and
+  `executor.globalTables` rather than kept as a list, so the answer is the
+  one the machine running the program would give: `table.unpack` exists
+  under the lua5.3 the tests use and does not under Cobalt.
+
+  No such check in fleet mode. The host's agent proxy raises on `env()` by
+  design, because the program runs on a worker whose capabilities, and so
+  whose sandbox, are not the host's to describe -- a fleet gets no gate
+  rather than a gate answering about the wrong machine.
+
+**Not added, with the reason recorded**
+
+- Operator-facing lint warnings on a freshly generated program, with an
+  optional capped auto-retry. The plan was to show the findings and offer
+  to send the program back; measuring first showed there is nothing worth
+  showing. `agent/lint.lua`'s three advisory findings all fire on correct
+  one-off programs, because all three judge whether a *saved routine's*
+  declared `frame:` matches its source and a one-off declares no frame:
+  `ambient-anchor` fires on any program that anchors to `nav.pos()`,
+  which is what a one-off is; `absolute-coords` fires when the operator
+  supplied the coordinates; and `relative-facing` fires on the mural bug
+  and on a correct `nav.step("forward")` loop with the same kind and the
+  same wording, so it does not distinguish them.
+
+  An earlier claim that the lint had flagged the mural before it ran was
+  true and worthless: it flags the correct version too. Warnings that
+  fire on nearly every program teach an operator to dismiss warnings, so
+  the tier stays unbuilt until there is a finding that discriminates. A
+  test now pins each of those three behaviours, so if one becomes
+  discriminating the suite says so instead of the question being
+  forgotten.
+
+**Fixed**
+
+- The history check failed on a commit that does not exist. On a
+  `pull_request` event `actions/checkout` takes `refs/pull/N/merge`, a
+  merge commit GitHub synthesises and authors as whoever opened the PR, so
+  the grep reported a leak in a commit that is not in the history and
+  never will be -- over `<handle>@users.noreply.github.com`, an address
+  that exists precisely so a real one is not published.
+
+  It now checks out the real head, and the check is split in two, because
+  the halves of a commit carry different risk. Message *bodies* are what
+  gets written here, so they keep the full pattern. *Author* lines are
+  metadata git requires and the repository owner chooses; a forge privacy
+  alias is allowed there, and a real address still is not. A handle in a
+  message body is still a finding -- the exemption does not cross over.
+
+- `test/all.lua` ran its child suites under a hardcoded `lua5.3`, so
+  `lua5.1 test/all.lua` reported on 5.3 and said nothing about 5.1 -- a
+  check answering about an interpreter nobody asked it about. It now uses
+  the interpreter it was launched with (`arg[-1]`). This is what exposed
+  the 5.1 question above: the suite had appeared to pass under 5.1 and
+  had never run under it.
+
+- `lint.globals` reported a global the program itself assigns as a name
+  that is not in the sandbox. `placed = 0` was skipped as a binding
+  target and so was the left-hand `placed` on the next line, but the one
+  on the right is a read, and it was a finding. Harmless while the check
+  only printed advice at registration time; the moment the static gate
+  above began refusing programs on it, it would have refused a counter.
+  Assignment *order* is still not checked, and deliberately: deciding
+  that statically means knowing when each function runs.
+
+- `install.lua` read a failing status off the wrong return value.
+  CC:Tweaked queues `http_success` only for 200..399 and otherwise calls
+  `request.failure(status.reasonPhrase(), stream)`, so `http.get` answers
+  a 404 with `nil, "Not Found", <handle>` -- the code is reachable only
+  through the third value, which the bootstrapper discarded. Its
+  `code >= 400` branch was therefore unreachable, and a 404 reported
+  itself as `Not Found` with no number. `claude/client.lua` and
+  `ui/share.lua` already took the error response; this now matches them.
+
+  `test/mock.lua`'s http fake was corrected first, since it had been
+  returning `"404 Not Found"` as the message -- a string that would let
+  code grepping for a number pass the suite and fail in-game.
+
+- A failed pull on a non-default ref says so. The stored ref outlives the
+  branch, so a merged and deleted branch leaves a turtle asking for
+  something that is not there; the error now names the ref and the way
+  back instead of offering three suspects. Deliberately not gated on
+  matching a status code in the message, since the wording is CC's and a
+  hint matching it would be a hint that never fires.
+
 - `block.pattern(rows, opts)` builds a 2D picture as an upright wall:
   `block.pattern({" XX ", "XXXX"}, { map = { X = "minecraft:green_wool" } })`.
   Row 1 is the top, a space or an unmapped character leaves the cell

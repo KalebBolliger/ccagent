@@ -90,6 +90,12 @@ automatically — it's a manual checklist, which is exactly the kind of thing
 that erodes over time. Consider that a warning sign if a change is adding
 mutable module state at all.
 
+One deliberate exception: `agent/fleet.lua` holds the board, the claims and
+the host link at module level and `lib.run` does **not** snapshot them. They
+are a record of what other machines said, not a setting a routine can leave
+wrong for its caller; a nested routine claiming work claims it for the same
+turtle, which is the behaviour wanted.
+
 ## `frame`: what it checks and — importantly — what it doesn't
 
 This was wrong in 1.1.0 and fixed in 1.1.1 (see `CHANGELOG.md`), and it's
@@ -300,9 +306,71 @@ confirmed this":
   can always ask for something the list would otherwise avoid, since it
   only gates the *default* pathfinding behavior via `nav.policy.dig`.
 
+- **The fleet's timings and sizes** (`agent/fleet.lua`, `claude/config.lua`):
+  a heartbeat every 10 s, contact counted lost after 30 s (three missed
+  beats), re-send after 3 s unacknowledged, a claim lease of 300 s, an
+  outbox of 300 entries before output lines are given up, an inbox of
+  200. All invented. The heartbeat trades radio traffic against how
+  quickly silence is noticed; the lease trades re-doing a stuck probe's
+  work against stealing work from a slow one. Nothing has measured either
+  in play.
+
 None of these need to block anything. They're listed so that if something
 about cost or correctness feels off in practice, this is the list of
 places to look first, rather than re-deriving suspicion from scratch.
+
+## The fleet: one judge, numbered news (`ui/switchboard.lua`, `agent/fleet.lua`)
+
+Two decisions everything else in fleet mode rests on.
+
+**The host is the only judge.** Workers never talk to each other; every
+claim, take, offer and message goes through the host, which handles one
+message at a time. That is what makes "two probes can never take the same
+cell" true for any number of probes without a consensus protocol. The cost
+is that a worker out of the host's range can neither take work nor reach
+another worker -- which relays (`fleet.relay`) address by extending range
+rather than by adding a second path.
+
+**News is numbered; questions are not.** Anything that changes shared
+state or must be seen (posts, offers, finishes, releases, messages,
+output, results) goes through the worker's outbox with a per-boot session
+and sequence number; the switchboard applies it strictly in order and
+acknowledges in the heartbeat, and the worker re-sends until acknowledged.
+Messages to a worker are queued on the host the same way. Claims and takes
+are questions: asked directly, answered or failed at once, because a
+grant that arrives a minute late is worse than a refusal now. Two things
+follow that are easy to break:
+
+- **One dispatcher on the host.** rednet hands every message to every
+  coroutine waiting for one, so the listener and any other reader both
+  see it. With numbered messages that is worse than a double print: the
+  second reader is told "duplicate" and drops what the first reader
+  ignored. `remoteRun` therefore never reads rednet while the listener
+  runs; it registers a sink and `handleStray` fills it.
+- **Copies, not references.** A modem copies what it carries. The test
+  radio in `test/run.lua` deep-copies for the same reason -- the first
+  version passed references, every probe's cache *was* the host's pool,
+  and an "out of range" test passed for the wrong reason.
+
+The host saves the pool, board, delivery state and its own session number
+to `/.ccagent/fleet.dat`; the session must survive a restart, or workers
+would mistake the restarted host's numbering for a new conversation.
+
+**Never acknowledge what is not written down.** An acknowledgement is a
+promise the sender acts on: the worker deletes what the host acknowledged.
+The first version saved fleet state on a ten-second timer and acknowledged
+from memory, so a host restarting inside that window had promised to keep
+messages that now existed nowhere -- and, waiting for them, refused every
+later message from that worker forever. (Its visible symptom, the cheap
+direction of the same gap, was output printed twice after a restart.) So
+`M.beat` saves before it acknowledges, the file is written beside the old
+one and moved into place, and every numbered message carries `low`, the
+oldest its sender still holds: a receiver whose count is below `low` is
+waiting for something gone, says how much was lost, and moves on. The
+same `low` makes a fresh count start at the oldest message still in flight
+rather than at whichever arrived first. Any new acknowledged channel needs
+both: durable before acknowledged, and a way out when that was violated
+anyway.
 
 ## Where the system is deliberately unfinished
 

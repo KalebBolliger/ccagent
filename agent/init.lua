@@ -23,6 +23,7 @@ local registry = require("agent.registry")
 local contract = require("agent.contract")
 local lint     = require("agent.lint")
 local lib      = require("agent.lib")
+local fleet    = require("agent.fleet")
 
 local agent = {}
 
@@ -31,6 +32,7 @@ agent.caps, agent.world, agent.nav     = caps, world, nav
 agent.inv,  agent.block, agent.job     = inv, block, job
 agent.registry, agent.lib              = registry, lib
 agent.contract, agent.lint             = contract, lint
+agent.fleet                            = fleet
 
 agent.VERSION = "1.2.0"
 
@@ -107,9 +109,10 @@ function agent.boot(opts)
     if not ok then util.log.warn("calibration: %s", tostring(err)) end
     if not nav.home() then nav.setHome() end
   end
-  -- Observations are only about the frame they were made in. Without GPS
-  -- a re-placed turtle starts a new one, and the old memory then
-  -- describes somewhere else.
+  -- Observations are only about the frame they were made in, so a new
+  -- frame drops them. Note what does NOT start one: without GPS a turtle
+  -- that was carried somewhere boots into its stored pose, because
+  -- nothing in the game says it moved. Only /forget (or a GPS fix) does.
   world.useFrame(nav.frameId())
 
   state.flush()
@@ -142,6 +145,11 @@ function agent.situation()
     bits[#bits + 1] = "inv: " .. inv.summary(6)
     bits[#bits + 1] = "seen: " .. world.summary(nav.pos(), 6)
   end
+  -- Only on a fleet worker. A program written while out of contact has
+  -- to know it, and one about to walk away from the host has to know how
+  -- far it can go: neither is visible from anything else on this list.
+  local link = fleet.summary()
+  if link then bits[#bits + 1] = link end
   return table.concat(bits, "\n")
 end
 
@@ -248,6 +256,31 @@ registry.add("job", job, "talk to the operator; survive reboots", {
   { fn = "recall",     sig = "(key, default?) -> value" },
 })
 
+registry.add("fleet", fleet, "share work and messages with other turtles on the same host", {
+  { fn = "offer",     sig = "(name, data?)",
+    doc = "add a piece of work to the shared pool; data is a small table, data.pos lets take() hand out the nearest, data.priority (higher first) the most urgent. Re-offering a known name does nothing, so every turtle may offer the same list" },
+  { fn = "take",      sig = "(opts?) -> name, data, info",
+    doc = "take the best open piece (priority, then nearest to opts.near or you, then oldest); info={open,taken,done}. nil name: info.reason 'none' (if info.taken>0 others still work and pieces may come back: wait and retry) or 'contact' (out of range: unknown)" },
+  { fn = "claim",     sig = "(name) -> ok, holderId",
+    doc = "take a SPECIFIC named piece; false + holder if another turtle has it or finished it. nil, err = out of contact: unknown, NOT taken. Claiming your own again confirms it did not lapse" },
+  { fn = "finish",    sig = "(name)",              doc = "mark taken work done; it stays taken for good. Unfinished work returns to the pool when your job ends, or after ~5 min without contact" },
+  { fn = "release",   sig = "(name)",              doc = "give back work you could not finish; it becomes open again for another turtle" },
+  { fn = "work",      sig = "() -> {open,taken,done}", doc = "pool counts as last heard (take() is the authority)" },
+  { fn = "claims",    sig = "() -> {name=id}",     doc = "who holds or finished what" },
+  { fn = "isDone",    sig = "(name) -> bool" },
+  { fn = "post",      sig = "(key, value)",        doc = "a small fact everyone can see (string/number/small table); latest per key wins. e.g. post('pos', nav.pos())" },
+  { fn = "board",     sig = "() -> {[id]={label,age,<key>=value}}", doc = "what every turtle last posted, you included; age = seconds since that turtle last posted" },
+  { fn = "send",      sig = "(to, topic, body?)",  doc = "message one turtle (id) or 'all' others; delivered in order, held while out of range" },
+  { fn = "receive",   sig = "(timeout?, topic?) -> {from,label,topic,body}|nil",
+    doc = "next message, oldest first; timeout seconds (default 0 = just look); topic filters. from='operator' for the operator's /fleet tell, e.g. topic 'recall'" },
+  { fn = "inbox",     sig = "(topic?) -> n",       doc = "messages waiting" },
+  { fn = "link",      sig = "() -> {connected,heardAgo,distance,lastContact,modem,hostModem,unlimited,pending}",
+    doc = "contact with the host. Not unlimited: a wireless modem reaches ~64 blocks below y=96. Watch distance/connected before going further; nav.moveTo(lastContact) to reconnect. pending = messages not yet delivered" },
+  { fn = "relay",     sig = "(on) -> ok",          doc = "make THIS turtle repeat rednet for the others (stays on after the job); park it between the host and turtles beyond range" },
+  { fn = "id",        sig = "() -> n",             doc = "this turtle's id, as used in board, claims and messages" },
+  { fn = "connected", sig = "() -> bool",          doc = "a host is relaying right now; false = alone or out of contact (link() says which)" },
+})
+
 registry.add("lib", lib, "saved routines, callable by name", {
   { fn = "run",  sig = "(name, args?) -> result",
     doc = "call a registered routine; raises on a bad name, bad args or unmet needs" },
@@ -256,7 +289,7 @@ registry.add("lib", lib, "saved routines, callable by name", {
 })
 
 registry.add("caps", caps, "what this machine can actually do", {
-  { fn = "has",     sig = "(name) -> bool",                 doc = "turtle, digging, crafting, equip, gps, modem, wirelessModem, unlimitedFuel" },
+  { fn = "has",     sig = "(name) -> bool",                 doc = "turtle, digging, crafting, equip, gps, modem, wirelessModem, enderModem, unlimitedFuel" },
   { fn = "get",     sig = "(name) -> value" },
   { fn = "require", sig = "(name, why?)",                   doc = "hard guard; errors with a readable message" },
   { fn = "refresh", sig = "() -> flags",                    doc = "re-probe after equipping: equipping a crafting table adds crafting" },

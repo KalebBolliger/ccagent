@@ -96,6 +96,99 @@ cc> @7 build a 9x9 cobblestone floor under you
 cc@7> all come home and unload
 ```
 
+`@id` and `all` ask Claude and then **wait for the run to finish** — `all`
+does each worker in turn. To put several turtles to work at the same time,
+get a program right once (`/dry <request>` writes one for the current
+worker without running it), `/save` it, and launch it:
+
+```
+cc> /launch scout all          (or /launch scout 3,7)
+scout -> 3,7
+[3] heading to sector 1
+[7] waiting for: 32 coal
+cc> /who
+ 3    probe-a        [scout] chest at 12,-51,40: 2 echo_shard
+ 7    probe-b        [scout] waiting for: 32 coal
+cc> /stop all
+```
+
+A launched job is not waited on, so it has no time limit on the host;
+`/stop` and `/poll` still reach a worker while it is busy.
+
+`/share 3` asks worker 3 for its report — the program, its output, its log,
+and a trail of where it believed it was while it ran — and saves it to
+`/ccagent/reports/w3.txt` on the host before offering to post it.
+
+### Turtles that split a job between them
+
+A program on a worker coordinates with the others through `fleet`, with
+the host as the only judge. It works the same for one probe or twenty,
+and nothing in it needs to know how many there are:
+
+```lua
+for cx = 0, 7 do for cz = 0, 7 do                  -- every probe may offer
+  fleet.offer(("cell %d,%d"):format(cx, cz),        -- the same list; repeats
+              { pos = { x = cx * 16, y = 0, z = cz * 16 } })  -- are ignored
+end end
+while true do
+  if fleet.receive(0, "recall") then break end      -- /fleet tell all recall
+  local name, data, info = fleet.take()             -- nearest open piece
+  if not name then break end                        -- info.reason says why
+  -- ... search it; fleet.offer anything new found on the way ...
+  fleet.finish(name)
+end
+```
+
+- **Work** is open, taken or done. `fleet.take` hands out the best open
+  piece (highest `data.priority`, then nearest, then oldest);
+  `fleet.claim(name)` takes one specific piece. Taken work that is not
+  finished goes back to the pool when the job ends, or when the probe has
+  been silent for five minutes.
+- **Messages**: `fleet.post` for facts everyone sees on the board,
+  `fleet.send(id or "all", topic, body)` / `fleet.receive` for messages,
+  and `/fleet tell <ids|all> <topic>` from the operator.
+- **Delivery**: everything but the questions (take, claim) is numbered,
+  applied by the host in order, and re-sent until acknowledged -- in both
+  directions -- so a probe that walks out of range delays its news rather
+  than losing it. Only after a very long silence are its oldest output
+  lines given up, and the host says how many.
+
+`/fleet` shows the board, each worker's claims, link and queued messages;
+`/fleet work` lists every piece; `/fleet reset` clears work and board
+before a new expedition. On the standalone controller the pool is kept
+locally, so the same program runs as a fleet of one.
+
+A claim lasts while the job that took it runs. `fleet.finish(name)` keeps
+it for good; anything unfinished goes back to the pool when the job ends,
+or when the worker has not been heard from for five minutes (`claimLease`).
+The host keeps the board and claims on disk, so a host restart does not
+lose them.
+
+**Range.** Rednet is fire-and-forget: out of range, output and posts are
+lost without an error. A normal wireless modem reaches 64 blocks below
+y=96, rising to 384 at build height; an ender modem has no limit, and a
+message arrives within the *larger* of the two ends' ranges, so one ender
+modem at the host covers every worker. Set `hostModem = "ender"` in the
+host's `/ccagent/config.lua` if it has one -- the game cannot tell a
+program which kind a computer has. The host sends a heartbeat every ten
+seconds; each worker tracks when it last heard it, how far away it was,
+and where it stood, and `fleet.link()` and the `link:` line of its state
+say so. To extend the reach, put a computer running CC's built-in `repeat`
+program between the host and the workers, or turn a worker into one:
+`/fleet relay 4 on`, or `fleet.relay(true)` from a program that parks a
+probe at the edge of range. A relay stays one across reboots until turned
+off.
+
+Positions are only comparable if the turtles share a frame. With GPS they
+do. Without it, place them facing the same way and give each its offset
+from the host: `/forget 1 0,0,0`, `/forget 2 1,0,0`, `/forget 3 2,0,0` —
+"north" is then the way they all face, and x increases to their right.
+
+**Moved a turtle without GPS?** Run `/forget` on it (or `/forget 3` from
+the host). Without GPS a turtle boots into the position it last stored,
+because nothing tells it that it was carried; until you reset it, it
+plans with the old place's map and the old heading.
+
 The prompt is `cc>` — not the shell's `>`, so it is clear which of the two
 you are typing at. On a host aimed at one turtle it carries the target:
 `cc@7>`.
@@ -323,7 +416,7 @@ Anything that is not a slash command is a request.
 | `/stats` | token usage, including cache hits |
 | `/doctor` | version, transport settings, and one live test request |
 | `/share [name]` | post the last run — or a saved program — somewhere you can read it |
-| `/update` | pull the latest code and reboot |
+| `/update [ref]` | pull the latest code, or a branch, and reboot |
 
 Press **Q** while a job runs to ask it to stop at the next checkpoint; press it
 again to force.
@@ -450,8 +543,8 @@ about stack depth:
 `nav` movement and pathfinding · `block` inspect/dig/place/attack in any of ten
 direction words · `inv` inventory as a query · `world` persistent block memory ·
 `geom` coordinate math · `job` operator I/O and reboot-safe checkpoints · `lib`
-your own registered routines · `caps` capability guards · `helper` odds and
-ends.
+your own registered routines · `caps` capability guards · `fleet` splitting
+work with other turtles on the same host · `helper` odds and ends.
 
 `/manifest` prints the current list with signatures. A few of the calls that do
 the most work:
@@ -592,6 +685,25 @@ repository having an opinion about which one you use.
 reboot, without leaving the controller. The pull is all-or-nothing, so a
 failed one leaves the install untouched.
 
+### Running a branch
+
+`/update <ref>` pulls that branch instead, and the ref sticks: every bare
+`/update` after it stays there until you say otherwise. That makes trying
+an unfinished change a one-word operation and makes forgetting you did a
+real hazard, so `/doctor` always prints the ref, every `/share` report
+carries it, and a turtle on anything other than `main` says so without
+being asked.
+
+Pass the ref to `/update`, not to `install.lua` as a bare word: a bare
+argument shaped like `owner/name` is read as a *repository*, and branch
+names like `claude/some-branch` are shaped exactly like that. `/update`
+passes `--ref` for you; from the shell, write `install.lua --ref
+claude/some-branch`.
+
+When a branch is merged and deleted the stored ref outlives it, so the
+next pull fails. The error names the ref and the way back
+(`install.lua main`).
+
 ## Cost control
 
 - **Keep `cache = true`.** It is most of the savings. `/stats` shows cache
@@ -616,6 +728,8 @@ failed one leaves the install untouched.
   is still running the defaults it was installed with. `boot` says when the
   shipped file has changed; `/doctor` prints what is actually in force.
 - `maxRepairs` (default 2) bounds the automatic fix loop.
+- `staticRepairs` (default 1) bounds a separate loop that runs *before* the
+  program does — see below.
 - Responses are streamed. This is not optional in practice: CC:Tweaked kills
   a connection that goes 30s without bytes, and a non-streaming request is
   silent for the whole generation, so long jobs died as `Timed out`.
@@ -660,7 +774,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 667
+`lua5.3 test/all.lua` runs the three suites against a mock world — 825
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,
@@ -672,6 +786,45 @@ catch a wrong belief about what CC:Tweaked or Minecraft does, because
 `test/mock.lua` encodes the same belief — several bugs have shipped with a
 passing test that agreed with them. `CLAUDE.md` explains the loop that
 works when the game and the tests disagree.
+
+GitHub Actions runs the suite on every push, parses every tracked file under
+both `luac5.3` and `luac5.1` — the closest available parser to the Cobalt
+grammar the turtle actually runs — and greps the history for anything
+`CLAUDE.md` forbids committing. Running the whole *suite* under `lua5.1`
+deliberately is not attempted; `CLAUDE.md` says why.
+
+### A program is checked before it is allowed to move
+
+Lua resolves a name when the line runs, so a program calling a function that
+was never written starts, works, changes the world, and only then dies. That
+is how `inv.fuel()` — a call that does not exist and never did — got as far
+as a real turtle: the answer was in the API listing in its own system prompt
+the whole time.
+
+So before the first move, every generated program is checked against the
+sandbox it is about to run in. Two things are refused:
+
+- a bare name that is not there (`frobnicate`, or `fs` — deliberately absent)
+- a field on a namespace that *is* there (`inv.fuel`, `string.frmat`)
+
+Both are facts rather than predictions: the table is right there and the key
+is in it or not. The surface is asked of the live sandbox rather than kept as
+a list, which means it answers for the machine the program will run on —
+`table.unpack` exists under the `lua5.3` the tests use and does not under
+CC's Cobalt, and only the in-game answer matters.
+
+A program that trips this is sent back once with the specific missing names,
+not a generic failure. If it comes back still naming them it is **not run**:
+executing it would change the world up to the bad line in exchange for
+nothing. A clean program costs no extra request.
+
+Everything else `agent/lint.lua` reports is a judgement about style or about
+a saved routine's contract, and is not grounds for refusing to run anything.
+
+In fleet mode there is no such check. The host's agent proxy raises on
+`env()` by design, because the program runs on a worker whose capabilities —
+and so whose sandbox — are not the host's to describe. A fleet gets no gate
+rather than a gate answering about the wrong machine.
 
 ## Where this is going
 

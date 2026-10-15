@@ -543,6 +543,13 @@ function fs.getDir(p) return (p:match("^(.*)/[^/]*$")) or "" end
 function fs.makeDir() end
 function fs.list() return {} end
 function fs.delete(p) files[p] = nil end
+-- CC:Tweaked core/filesystem/FileSystem.move: refuses a missing source
+-- ("No such file") and an existing destination ("File exists").
+function fs.move(from, to)
+  if files[from] == nil then error("/" .. from .. ": No such file", 2) end
+  if files[to] ~= nil then error("/" .. to .. ": File exists", 2) end
+  files[to], files[from] = files[from], nil
+end
 function fs.open(p, mode)
   if mode == "r" then
     if not files[p] then return nil end

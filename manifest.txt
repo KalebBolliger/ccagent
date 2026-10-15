@@ -28,6 +28,8 @@ agent/registry.lua
 agent/contract.lua
 agent/lint.lua
 agent/lib.lua
+agent/pool.lua
+agent/fleet.lua
 agent/init.lua
 
 claude/client.lua
@@ -38,9 +40,11 @@ claude/session.lua
 claude/config.lua
 
 ui/console.lua
+ui/origin.lua
 ui/jobs.lua
 ui/share.lua
 ui/net.lua
+ui/switchboard.lua
 ui/controller.lua
 ui/worker.lua
 ui/host.lua

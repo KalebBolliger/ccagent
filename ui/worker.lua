@@ -29,18 +29,144 @@ local M = {}
 
 local cfg, hostId, running = nil, nil, true
 
+-- What /share on the host asks for: the program this worker last ran,
+-- what came of it, and where the turtle went while it ran.
+local last = { src = nil, result = nil, trail = {}, lines = {}, situation = nil }
+local TRAIL_MAX = 200
+
 local function findHost()
   if not _G.rednet then return nil end
   local id = rednet.lookup(cfg.protocol, cfg.hostname)
   return id
 end
 
+local function describeLabel()
+  return (os.getComputerLabel and os.getComputerLabel()) or ("turtle-" .. os.getComputerID())
+end
+
 local function describe()
   return {
     caps      = agent.caps.detect(),
     situation = agent.situation(),
-    label     = (os.getComputerLabel and os.getComputerLabel()) or ("turtle-" .. os.getComputerID()),
+    label     = describeLabel(),
   }
+end
+
+--- One line per position change, newest last. Reads the pose the library
+--- already tracks -- no turtle call, so it is safe beside a running job.
+local function sampleTrail(t0)
+  local p = agent.nav.pos()
+  if not p then return end
+  local f = agent.nav.facing and agent.nav.facing()
+  local line = ("%5ds %s"):format(math.floor(os.clock() - t0),
+                                  agent.geom.tostring(p, f))
+  local prev = last.trail[#last.trail]
+  if prev and prev:sub(8) == line:sub(8) then return end
+  last.trail[#last.trail + 1] = line
+  if #last.trail > TRAIL_MAX then table.remove(last.trail, 1) end
+end
+
+--- The report /share posts. Built here because only the worker has the
+--- log, the output and the trail; the host adds what only it knows.
+local function report(busyJob)
+  local share = require("ui.share")
+  local okOrigin, origin = pcall(require, "ui.origin")
+  local situation = busyJob
+    and ((last.situation or "") .. "\n(busy with job " .. tostring(busyJob) .. ")")
+    or agent.situation()
+  local trail = #last.trail > 0 and table.concat(last.trail, "\n") or nil
+  return share.bundle({
+    version   = agent.VERSION,
+    origin    = okOrigin and origin.line({ always = true }) or nil,
+    situation = situation,
+    code      = last.src,
+    result    = last.result,
+    trail     = trail and ("time  believed position (frame: see state)\n" .. trail),
+    log       = share.tail(cfg.logFile, share.logLines),
+  })
+end
+
+--- Start over from where the turtle stands now. Without GPS the pose is
+--- kept across a reboot -- right after a chunk reload, wrong after the
+--- turtle was carried somewhere: it boots believing it is still where it
+--- last stood, with that place's block memory and home, and nothing in
+--- the game tells it otherwise. Same as the controller's /forget.
+---
+--- With an origin, the spot becomes that coordinate (still facing
+--- "north", i.e. the way the turtle faces now). That is how probes placed
+--- side by side get one shared frame: /forget each at its offset, all
+--- facing the same way, and their positions mean the same thing.
+local function forget(origin)
+  agent.world.clear()
+  agent.state.clear()
+  if origin then agent.nav.localFrame(origin, agent.geom.NORTH) end
+  agent.boot()
+end
+
+--- Answer the host's heartbeat. The reply is what lets the host tell a
+--- probe that is busy and quiet from one that is gone, which is what
+--- decides when its unfinished claims go back to the pool.
+local relayOn = false
+
+--- The heartbeat: proof of contact, the host's acknowledgements, and the
+--- cue to re-send what it has not seen (agent/fleet.lua, fleet.handle).
+local function beat(id, msg)
+  hostId = hostId or id
+  if id ~= hostId then return end
+  agent.fleet.handle(msg, agent.nav.pos())
+end
+
+--- Everything else from the host that agent.fleet handles.
+local function fleetMessage(id, msg)
+  if hostId and id ~= hostId then return end
+  agent.fleet.handle(msg, agent.nav.pos())
+end
+
+------------------------------------------------------------------ relay ---
+
+-- Relay mode does what CC's rom/programs/rednet/repeat.lua does: every
+-- rednet send is also transmitted on CHANNEL_REPEAT, and a repeater sends
+-- each message it has not seen before on to the recipient's channel and
+-- to other repeaters. rednet itself discards copies it has already
+-- received, so extra relays cost traffic, never duplicates.
+local modemName
+local relaySeen = {}
+
+local function setRelay(on)
+  if not (_G.rednet and _G.peripheral and modemName) then return false end
+  relayOn = on and true or false
+  local ch = net.CHANNEL_REPEAT
+  if relayOn then peripheral.call(modemName, "open", ch)
+  else peripheral.call(modemName, "close", ch) end
+  agent.state.set("relay", relayOn)
+  agent.state.flush()
+  return true
+end
+
+local function relayLoop()
+  while running do
+    local _, side, channel, reply, m = os.pullEvent("modem_message")
+    if relayOn then
+      local to = net.repeatTarget(channel, m, relaySeen, util.now())
+      if to then
+        peripheral.call(side, "transmit", net.CHANNEL_REPEAT, reply, m)
+        peripheral.call(side, "transmit", to, reply, m)
+      end
+    end
+  end
+end
+
+--- Every wireless message carries the distance it travelled, but rednet
+--- hands programs only the sender and the payload. Read the raw event
+--- alongside it to learn how far away the host is -- the number that says
+--- how much further a probe can go before it falls out of range.
+local function watchLink()
+  while running do
+    local _, _, _, _, payload, distance = os.pullEvent("modem_message")
+    if hostId and type(payload) == "table" and payload.nSender == hostId then
+      agent.fleet.heard(distance, agent.nav.pos())
+    end
+  end
 end
 
 local function announce()
@@ -52,26 +178,87 @@ end
 
 local function runProgram(msg)
   console.status("running job " .. tostring(msg.job))
-  local result = executor.run(msg.src, agent.env(), {
-    name = msg.job or "job",
-    onOutput = function(kind, text, extra)
-      if kind == "warn" then console.warn(text)
-      elseif kind == "report" then console.head("= " .. text)
-      else console.say(text) end
-      if hostId then
-        net.send(hostId, { t = "output", kind = kind, text = text,
-                           job = msg.job, extra = extra }, cfg.protocol)
+  local lastLine
+  local result
+  local t0 = os.clock()
+  last.src, last.result, last.trail, last.lines = msg.src, nil, {}, {}
+  last.situation = agent.situation()
+  sampleTrail(t0)
+  local function work()
+    result = executor.run(msg.src, agent.env(), {
+      name = msg.job or "job",
+      onOutput = function(kind, text, extra)
+        if kind == "warn" then console.warn(text)
+        elseif kind == "report" then console.head("= " .. text)
+        else console.say(text) end
+        lastLine = text
+        last.lines[#last.lines + 1] = tostring(text)
+        if #last.lines > 400 then table.remove(last.lines, 1) end
+        -- Through the outbox: held and re-sent while out of range, so a
+        -- probe that walks out of contact delays its log rather than
+        -- losing it (only a very long silence gives up the oldest lines).
+        if hostId then
+          agent.fleet.queue({ t = "output", kind = kind, text = text,
+                              job = msg.job, extra = extra })
+        end
+      end,
+    })
+  end
+
+  -- listen() is parked inside this call for as long as the job runs, so
+  -- without a second reader nothing hears the host: /stop and /poll went
+  -- unanswered until a job ended by itself, which for a long expedition
+  -- is exactly when you no longer need them. A poll is answered from what
+  -- is already known rather than by calling describe(), which probes the
+  -- turtle and would interleave its own turtle calls with the job's.
+  local function control()
+    while true do
+      local id, m = net.receive(nil, cfg.protocol)
+      if id and m then
+        if m.t == "abort" then
+          executor.requestAbort()
+        elseif m.t == "poll" then
+          net.send(id, { t = "state", busy = msg.job, last = lastLine,
+                         label = describeLabel() }, cfg.protocol)
+        elseif m.t == "run" then
+          net.send(id, { t = "result", job = m.job, ok = false,
+                         error = "busy with job " .. tostring(msg.job) }, cfg.protocol)
+        elseif m.t == "fleet" or m.t == "claimed" or m.t == "took" then
+          fleetMessage(id, m)
+        elseif m.t == "relay" then
+          setRelay(m.on)
+        elseif m.t == "beat" then
+          beat(id, m)
+        elseif m.t == "forget" then
+          net.send(id, { t = "output", kind = "warn", job = msg.job,
+                         text = "busy; /stop first, then /forget" }, cfg.protocol)
+        elseif m.t == "report" then
+          last.result = { running = true, output = table.concat(last.lines, "\n") }
+          net.send(id, { t = "report", text = report(msg.job) }, cfg.protocol)
+        end
       end
-    end,
-  })
+    end
+  end
+
+  local function trail()
+    while true do
+      sleep(2)
+      sampleTrail(t0)
+    end
+  end
+
+  if _G.parallel then parallel.waitForAny(work, control, trail) else work() end
+  sampleTrail(t0)
+  last.result = result
+  last.situation = nil
   agent.state.flush()
   if hostId then
-    net.send(hostId, {
+    agent.fleet.queue({
       t = "result", job = msg.job,
       ok = result.ok, error = result.error, output = result.output,
       result = result.result, aborted = result.aborted, elapsed = result.elapsed,
       situation = agent.situation(),
-    }, cfg.protocol)
+    })
   end
   if result.ok then console.head(("done in %.1fs"):format(result.elapsed or 0))
   elseif result.aborted then console.warn("stopped")
@@ -93,6 +280,22 @@ local function listen()
         net.send(id, d, cfg.protocol)
       elseif msg.t == "abort" then
         executor.requestAbort()
+      elseif msg.t == "report" then
+        hostId = id
+        net.send(id, { t = "report", text = report(nil) }, cfg.protocol)
+      elseif msg.t == "fleet" or msg.t == "claimed" or msg.t == "took" then
+        fleetMessage(id, msg)
+      elseif msg.t == "relay" then
+        setRelay(msg.on)
+        console.head("relay " .. (relayOn and "on" or "off"))
+      elseif msg.t == "beat" then
+        beat(id, msg)
+      elseif msg.t == "forget" then
+        hostId = id
+        forget(msg.origin)
+        console.head("pose and memory cleared (host)")
+        local d = describe(); d.t = "state"
+        net.send(id, d, cfg.protocol)
       elseif msg.t == "ack" then
         console.dim(tostring(msg.text))
       elseif msg.t == "hostup" then
@@ -118,6 +321,10 @@ local function prompt()
     if input == "/exit" then running = false
     elseif input == "/state" then console.info(agent.situation())
     elseif input == "/stop" then executor.requestAbort()
+    elseif input == "/forget" then
+      forget()
+      console.head("pose and memory cleared")
+      console.info(agent.situation())
     elseif input == "/host" then
       hostId = findHost()
       console.dim(hostId and ("host is " .. hostId) or "no host found")
@@ -141,6 +348,7 @@ function M.run()
   agent.boot()
 
   local ok, err = net.open()
+  if ok then modemName = err end
   if not ok then
     console.err("no modem: " .. tostring(err))
     console.dim("attach a wireless modem, or use ccagent/ui/controller instead")
@@ -153,12 +361,42 @@ function M.run()
   end
 
   hostId = findHost()
+  -- Programs reach the host only through agent.fleet; this is its wire.
+  agent.fleet.wire = {
+    id = os.getComputerID(), label = describeLabel(),
+    -- A new number per boot: the host restarts its count for us, instead
+    -- of discarding a rebooted worker's messages as already seen.
+    session = util.now(),
+    connected = function() return hostId ~= nil end,
+    setRelay = setRelay,
+    relaying = function() return relayOn end,
+    modem = function()
+      local ender = agent.caps.get("enderModem")
+      if ender then return "ender" end
+      if ender == false and agent.caps.has("wirelessModem") then return "wireless" end
+      return nil
+    end,
+    send = function(m)
+      if not hostId then return false end
+      return net.send(hostId, m, cfg.protocol)
+    end,
+  }
+  -- A relay stays a relay across a chunk reload: it was parked there to
+  -- hold the network together, and nobody is near it to turn it back on.
+  if agent.state.get("relay") then
+    setRelay(true)
+    console.warn("relay mode on (host: /fleet relay <id> off)")
+  end
   console.info(agent.situation())
+  if agent.nav.frame() == "local" then
+    console.warn("no GPS: position kept from last boot")
+    console.dim("carried here? /forget (or host /forget)")
+  end
   console.dim(hostId and ("host: " .. hostId) or "waiting for a host...")
   announce()
 
   if _G.parallel then
-    parallel.waitForAny(listen, prompt)
+    parallel.waitForAny(listen, prompt, watchLink, relayLoop)
   else
     listen()
   end

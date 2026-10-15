@@ -165,6 +165,69 @@ ok(launcher and launcher:find("update", 1, true) ~= nil,
    "the launcher knows `ccagent update`")
 
 --------------------------------------------------------------------------
+group("nothing that ships reaches for a feature Cobalt lacks")
+do
+  -- The deployment target is CC:Tweaked's Cobalt, roughly 5.1, and the
+  -- tests run under lua5.3 for convenience -- so a 5.2/5.3-only feature
+  -- passes every suite and fails on a turtle. CLAUDE.md has said so from
+  -- the start and nothing checked it.
+  --
+  -- Why this is a grep over shipped files and not a run under lua5.1:
+  -- Cobalt is 5.1 PLUS backports, so a plain 5.1 is stricter than the
+  -- real target in ways that matter. It rejects load(src, name, "t", env)
+  -- -- the four-argument form the sandbox depends on -- while
+  -- CC:Tweaked's own rom uses that form throughout and contains no
+  -- setfenv at all. An interpreter that fails on code the game runs
+  -- happily is a check that would have to be ignored, and a check that
+  -- gets ignored is worse than none.
+  --
+  -- Syntax-level differences (// , bitwise operators, goto) are caught by
+  -- the luac5.1 parse sweep in CI, which errs in the same stricter
+  -- direction but only ever rejects things Cobalt also rejects today.
+  -- What is left is library surface, which is what this checks.
+  local lint = require("agent.lint")
+  local ABSENT = {
+    { pattern = "table%.unpack", name = "table.unpack",
+      -- The one legitimate mention is the documented shim itself.
+      allow = "or unpack", fix = "use util.unpack" },
+    { pattern = "utf8%.", name = "utf8", fix = "no utf8 library in Cobalt" },
+  }
+  local offenders = {}
+  for _, path in ipairs(manifest) do
+    local src = slurp(path)
+    if src then
+      -- Comments and string literals blanked first, so a doc comment
+      -- explaining the trap is not itself the trap.
+      local code = lint.strip(src)
+      for _, want in ipairs(ABSENT) do
+        for line in code:gmatch("[^\n]+") do
+          if line:find(want.pattern) and
+             not (want.allow and line:find(want.allow, 1, true)) then
+            offenders[#offenders + 1] = ("%s: %s (%s)")
+              :format(path, want.name, want.fix)
+          end
+        end
+      end
+    end
+  end
+  ok(#offenders == 0, "no shipped file uses a 5.2+ library feature",
+     table.concat(offenders, "; "))
+
+  -- The check must see a real one. util.lua's shim is the allowed case
+  -- and has to stay allowed; anything else is a finding.
+  local shim = "util.unpack = table.unpack or unpack"
+  ok(lint.strip(shim):find("table%.unpack") ~= nil
+     and shim:find("or unpack", 1, true) ~= nil,
+     "the documented shim is the allowed mention")
+  local bad = "local a = table.unpack(t)"
+  ok(lint.strip(bad):find("table%.unpack") ~= nil
+     and bad:find("or unpack", 1, true) == nil,
+     "and a bare use is not")
+  ok(lint.strip('-- table.unpack exists under 5.3'):find("table%.unpack") == nil,
+     "while prose about it in a comment is invisible to the check")
+end
+
+--------------------------------------------------------------------------
 group("install.lua -- the bootstrapper")
 
 local BOOT = assert(loadfile("install.lua"))
@@ -172,11 +235,29 @@ local BOOT = assert(loadfile("install.lua"))
 --- Run install.lua against a fake http server.
 --  served: url-prefix -> { path -> content }, content false to fail it.
 --  answers: queued replies for read(), when the run is expected to prompt.
+--
+-- The failure shape is CC's, not a plausible one. HttpRequestHandler
+-- queues http_success only for 200..399 and otherwise calls
+-- request.failure(status.reasonPhrase(), stream), so http.get answers a
+-- 404 with nil, "Not Found", <handle> -- the reason phrase with no number
+-- in it, and the code only reachable through the third value. A mock that
+-- returned "404 Not Found" as the message would let code that greps the
+-- string for a number pass here and fail in-game, which is how the last
+-- two in-game failures happened.
 local function runBoot(args, served, existing, answers)
   mock.reset()
   for path, body in pairs(existing or {}) do mock.files[path] = body end
 
   local asked, sentHeaders = {}, {}
+  local function failure(code, phrase)
+    local closed = false
+    return nil, phrase, {
+      getResponseCode = function() return code end,
+      readAll = function() return "" end,
+      close = function() closed = true end,
+      wasClosed = function() return closed end,
+    }
+  end
   _G.http = {
     get = function(url, headers)
       asked[#asked + 1] = url
@@ -185,13 +266,13 @@ local function runBoot(args, served, existing, answers)
         local rest = url:sub(1, #prefix) == prefix and url:sub(#prefix + 2) or nil
         if rest and files[rest] ~= nil then
           local body = files[rest]
-          if body == false then return nil, "404 Not Found" end
+          if body == false then return failure(404, "Not Found") end
           return { readAll = function() return body end,
                    close = function() end,
                    getResponseCode = function() return 200 end }
         end
       end
-      return nil, "404 Not Found"
+      return failure(404, "Not Found")
     end,
   }
 
@@ -517,6 +598,63 @@ ok(not r.ok and tostring(r.err):find("suspect", 1, true) ~= nil,
 r = runBoot({ "--nope" }, { [HOST] = tree() })
 ok(not r.ok and tostring(r.err):find("unknown option", 1, true) ~= nil,
    "an unknown option is refused rather than guessed at", r.err)
+
+--------------------------------------------------------------------------
+-- a bare word is a ref, but a bare SLASHED word is a repo
+
+-- This is the ambiguity /update has to steer around. Every branch this
+-- project is developed on is shaped exactly like owner/name
+-- ("claude/some-branch"), so a bare branch name silently repoints the
+-- source at a repository that does not exist instead of changing the
+-- branch -- and the failure arrives as a 404 on a url nobody recognises.
+-- Hence `install --ref <branch>`, and hence the controller passing the
+-- flag rather than the word.
+local TPL2 = "https://raw.example/{repo}/{ref}/{path}"
+r = runBoot({ "--url", TPL2, "claude/my-branch" },
+            { ["https://raw.example/claude/my-branch/main"] = tree() })
+ok(r.ok, "a slashed bare word is taken as the REPO, not the ref", r.err)
+ok(r.asked[1] == "https://raw.example/claude/my-branch/main/manifest.txt",
+   "and lands on the default ref of a repo that does not exist", r.asked[1])
+
+r = runBoot({ "--url", TPL2, "--repo", "a/b", "--ref", "claude/my-branch" },
+            { ["https://raw.example/a/b/claude/my-branch"] = tree() })
+ok(r.ok, "--ref takes the same word as a branch", r.err)
+ok(r.asked[1] == "https://raw.example/a/b/claude/my-branch/manifest.txt",
+   "and a slash in a branch name is fine in the url", r.asked[1])
+
+--------------------------------------------------------------------------
+-- a vanished ref says so
+
+-- The stored ref outlives the branch: merge, delete, and a turtle left on
+-- it keeps asking for something that is not there. The hint is not gated
+-- on the status code, because CC reports a failing request through
+-- status.reasonPhrase() -- "Not Found", with no number in it -- so a hint
+-- matching a code in the message would be a hint that never fires.
+r = runBoot({ "--url", TPL2, "--repo", "a/b", "--ref", "merged-and-gone" }, {})
+ok(not r.ok, "a ref that is not there fails")
+-- Twice, not once. The generic error already prints the url it tried,
+-- and that url contains the ref -- so "the message mentions the ref"
+-- passes with the hint deleted. A second occurrence is the hint itself.
+local _, refMentions = tostring(r.err):gsub("merged%-and%-gone", "")
+ok(refMentions >= 2, "and the hint names the ref, not just the url it tried",
+   refMentions .. " mentions in: " .. tostring(r.err))
+ok(tostring(r.err):find("install main", 1, true) ~= nil,
+   "and the way back to the default", r.err)
+
+-- On the default ref there is no branch to blame, and saying so would
+-- send the operator after the wrong thing.
+r = runBoot({ "--url", TPL2, "--repo", "a/b" }, {})
+ok(not r.ok, "a broken source on the default ref still fails")
+ok(tostring(r.err):find("merged", 1, true) == nil,
+   "without inventing a deleted branch", r.err)
+
+-- CC hands a failing status back as nil + reason phrase + handle, so the
+-- number is only reachable through the third value. Taking it turns
+-- "Not Found" into "Not Found (404)".
+ok(tostring(r.err):find("Not Found", 1, true) ~= nil,
+   "the reason phrase survives into the message", r.err)
+ok(tostring(r.err):find("404", 1, true) ~= nil,
+   "with the code recovered from the error response", r.err)
 
 r = runBoot({ "--ref" }, { [HOST] = tree() })
 ok(not r.ok, "a flag with no value is refused", r.err)

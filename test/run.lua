@@ -2020,5 +2020,575 @@ do
 end
 
 --------------------------------------------------------------------------
+group("a fleet can be started at once and watched while it works")
+
+-- `all` asks Claude once per worker and runs them back to back, and /run
+-- holds the prompt until its one worker finishes, so three probes sent
+-- into the same structure left one after another. /launch sends and
+-- returns; progress and the result then arrive as stray traffic, which is
+-- the only place a launched job is ever seen.
+do
+  local sent = {}
+  local prevRednet, prevTest = _G.rednet, _G._TEST
+  _G.rednet = {
+    send = function(id, msg) sent[#sent + 1] = { id = id, msg = msg } end,
+    broadcast = function() end,
+    receive = function() return nil end,
+  }
+  _G._TEST = true
+  local prevId = os.getComputerID
+  os.getComputerID = prevId or function() return 1 end
+  local host = require("ui.host")
+  host.configure({ protocol = "ccagent" })
+  local console = require("ui.console")
+  local shown = {}
+  local saved = {}
+  for _, k in ipairs({ "say", "warn", "err", "head", "dim" }) do
+    saved[k] = console[k]
+    console[k] = function(t) shown[#shown + 1] = t end
+  end
+
+  host.handleStray(3, { t = "hello", label = "probe-a", situation = "s3" })
+  host.handleStray(7, { t = "hello", label = "probe-b", situation = "s7" })
+  sent = {}
+
+  local ids = host.parseIds("all")
+  ok(#ids == 2 and ids[1] == 3 and ids[2] == 7, "all names every known worker")
+  ids = host.parseIds("7, 3")
+  ok(#ids == 2 and ids[1] == 7 and ids[2] == 3, "a list is taken as given")
+  ok(host.parseIds("", 3)[1] == 3, "and nothing means the current worker")
+  ok(host.parseIds("3,x") == nil, "a typo is refused rather than skipped")
+
+  local went = host.launch("job.say('hi')", { 3, 7 }, "probe")
+  local runs = {}
+  for _, e in ipairs(sent) do if e.msg.t == "run" then runs[#runs + 1] = e end end
+  ok(#went == 2 and #runs == 2, "launch sends to every worker", #runs)
+  ok(runs[1].id ~= runs[2].id and runs[1].msg.job ~= runs[2].msg.job,
+     "each as its own job, without waiting for the first")
+
+  host.handleStray(3, { t = "output", kind = "say", text = "found 2 shards" })
+  local seen = false
+  for _, l in ipairs(shown) do if l == "[3] found 2 shards" then seen = true end end
+  ok(seen, "a launched job's progress is shown with its worker's id")
+
+  shown = {}
+  host.handleStray(7, { t = "result", ok = false, error = "busy with job j1" })
+  host.handleStray(3, { t = "result", ok = true, elapsed = 12 })
+  local done = false
+  for _, l in ipairs(shown) do if l:find("[3] done", 1, true) then done = true end end
+  ok(done, "and so is its result, which nothing else is waiting for")
+
+  for k, f in pairs(saved) do console[k] = f end
+  _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
+end
+
+--------------------------------------------------------------------------
+group("pool: the rules for shared work")
+
+do
+  local pool = require("agent.pool")
+  local p = pool.new()
+  ok(pool.offer(p, "a", { pos = { x = 0, y = 0, z = 0 } }) == true, "a new name is offered")
+  ok(pool.offer(p, "a", { pos = { x = 9, y = 0, z = 9 } }) == false,
+     "offering it again changes nothing, so every probe can offer the same list")
+  pool.offer(p, "b", { pos = { x = 20, y = 0, z = 0 } })
+  pool.offer(p, "c", { pos = { x = 40, y = 0, z = 0 }, priority = 5 })
+  local name = pool.take(p, 1, { x = 19, y = 0, z = 0 })
+  ok(name == "c", "priority beats distance", name)
+  name = pool.take(p, 2, { x = 19, y = 0, z = 0 })
+  ok(name == "b", "then the nearest", name)
+  name = pool.take(p, 3, nil)
+  ok(name == "a", "and with no position, the oldest", name)
+  ok(pool.take(p, 4) == nil, "nothing open, nothing taken")
+  ok(pool.release(p, "b", 1) == false, "only the holder can give work back")
+  ok(pool.release(p, "b", 2) == true, "the holder can")
+  local again, data = pool.take(p, 4, nil)
+  ok(again == "b" and data.pos.x == 20, "and released work is open again, data intact")
+  ok(pool.finish(p, "a", 3) and not pool.release(p, "a", 3),
+     "finished work cannot be given back")
+  ok(select(1, pool.claim(p, "a", 9)) == false, "or claimed by anyone else")
+  local c = pool.counts(p)
+  ok(c.open == 0 and c.taken == 2 and c.done == 1,
+     "counts", ("%d/%d/%d"):format(c.open, c.taken, c.done))
+  local freed = pool.releaseAll(p, 4)
+  ok(#freed == 1 and freed[1] == "b", "releaseAll frees only unfinished work")
+  local q = pool.import(pool.export(p))
+  ok(pool.counts(q).done == 1 and q.items.c.data.priority == 5,
+     "export and import keep everything")
+end
+
+--------------------------------------------------------------------------
+group("fleet: any number of probes over an unreliable radio")
+
+-- One real host and five real workers' fleet modules, connected by a
+-- simulated radio in which each worker can be in or out of range. A
+-- message out of range is simply lost, as rednet's are.
+do
+  local clock = 10000000
+  local prevEpoch = os.epoch
+  os.epoch = function() return clock end
+  local function tick(s) clock = clock + s * 1000 end
+
+  local realFleet = package.loaded["agent.fleet"]
+  local function newFleet()
+    package.loaded["agent.fleet"] = nil
+    local f = require("agent.fleet")
+    package.loaded["agent.fleet"] = realFleet
+    return f
+  end
+
+  local probes, inRange = {}, {}
+  local ids = { 3, 4, 5, 6, 7 }
+  -- A modem copies what it carries: the receiver never shares a table
+  -- with the sender. Passing references here once made every probe's
+  -- view of the pool BE the host's pool, and a test passed for it.
+  local function copy(v)
+    if type(v) ~= "table" then return v end
+    local o = {}
+    for k, x in pairs(v) do o[k] = copy(x) end
+    return o
+  end
+  local prevRednet, prevTest, prevId = _G.rednet, _G._TEST, os.getComputerID
+  local host
+  local function toWorker(id, msg)
+    if not inRange[id] then return end
+    local f = probes[id]
+    if msg.t == "beat" or msg.t == "fleet" or msg.t == "claimed" or msg.t == "took" then
+      f.handle(copy(msg), f.at)
+    end
+  end
+  _G.rednet = {
+    send = function(id, msg) toWorker(id, msg) end,
+    broadcast = function(msg) for _, id in ipairs(ids) do toWorker(id, msg) end end,
+    receive = function() return nil end,
+  }
+  _G._TEST = true
+  os.getComputerID = prevId or function() return 1 end
+  host = require("ui.host")
+  host.configure({ protocol = "ccagent", claimLease = 300, resendAfter = 3 })
+  local console = require("ui.console")
+  local saved, said = {}, {}
+  for _, k in ipairs({ "say", "warn", "err", "head", "dim", "info" }) do
+    saved[k] = console[k]
+    console[k] = function(t) said[#said + 1] = tostring(t) end
+  end
+
+  for i, id in ipairs(ids) do
+    local f = newFleet()
+    f.at = { x = (i - 1) * 16, y = 0, z = 0 }
+    f.wire = {
+      id = id, label = "probe-" .. i, session = 1,
+      connected = function() return true end,
+      send = function(m)
+        if inRange[id] then host.handleStray(id, copy(m)) end
+        return true
+      end,
+    }
+    probes[id] = f
+    inRange[id] = true
+    host.handleStray(id, { t = "hello", label = "probe-" .. i })
+  end
+  local sb = host.switchboard()
+  host.beat(clock)
+
+  -- Every probe runs the same program: offer the whole grid, then take
+  -- until nothing is left. Nobody is told how many others there are.
+  for _, id in ipairs(ids) do
+    for cx = 0, 3 do
+      for cz = 0, 2 do
+        probes[id].offer(("cell %d,%d"):format(cx, cz),
+                         { pos = { x = cx * 16, y = 0, z = cz * 16 } })
+      end
+    end
+  end
+  ok(sb:counts().open == 12, "five probes offering the same 12 cells make 12",
+     sb:counts().open)
+
+  local takenBy, firsts = {}, {}
+  local busy = true
+  while busy do
+    busy = false
+    for _, id in ipairs(ids) do
+      local name, data = probes[id].take({ near = probes[id].at })
+      if name then
+        busy = true
+        firsts[id] = firsts[id] or name
+        takenBy[name] = takenBy[name] and (takenBy[name] .. "+" .. id) or tostring(id)
+        probes[id].at = data.pos
+        probes[id].finish(name)
+      end
+    end
+  end
+  local dup, count = nil, 0
+  for name, by in pairs(takenBy) do
+    count = count + 1
+    if by:find("+", 1, true) then dup = name .. " by " .. by end
+  end
+  ok(count == 12 and not dup, "every cell taken exactly once", dup or count)
+  ok(sb:counts().done == 12, "and all twelve finished")
+  -- Probes stand 16 apart along x; probe 6 is level with cell 3,0, and
+  -- probe 7 beyond the grid gets the nearest one left after 6 has chosen.
+  ok(firsts[3] == "cell 0,0" and firsts[4] == "cell 1,0" and firsts[6] == "cell 3,0"
+     and firsts[7] == "cell 3,1",
+     "each probe started with the nearest cell still open",
+     ("%s %s %s %s"):format(tostring(firsts[3]), tostring(firsts[4]),
+                           tostring(firsts[6]), tostring(firsts[7])))
+  local _, _, info = probes[3].take()
+  ok(info.reason == "none" and info.taken == 0,
+     "an empty pool says so, and that nobody is still working")
+
+  -- Everything so far acknowledged, then a probe walks out of range
+  -- and keeps working.
+  tick(5); host.beat(clock)
+  ok(probes[5].link().pending == 0, "in range, the outbox empties at the next heartbeat",
+     probes[5].link().pending)
+  inRange[5] = false
+  probes[5].post("pos", { x = 1, y = 0, z = 0 })
+  probes[5].post("pos", { x = 2, y = 0, z = 0 })
+  probes[5].post("pos", { x = 3, y = 0, z = 0 })
+  probes[5].offer("corridor", { pos = { x = 99, y = 0, z = 0 } })
+  probes[5].send(6, "found", "chest at 99,0,0")
+  probes[5].queue({ t = "output", kind = "say", text = "line A" })
+  ok(sb.pool.items.corridor == nil, "nothing reaches the host out of range",
+     sb:counts().open)
+  ok(probes[5].link().pending >= 4, "it waits in the outbox", probes[5].link().pending)
+  ok(probes[5].link().pending <= 5,
+     "with three posts of one key kept as only the newest",
+     probes[5].link().pending)
+
+  tick(5)
+  inRange[5] = true
+  host.beat(clock)                      -- back in range: the beat re-sends
+  ok(sb.board[5] and sb.board[5].facts.pos.x == 3,
+     "the newest position arrives", sb.board[5] and sb.board[5].facts.pos.x)
+  ok(sb.pool.items.corridor ~= nil, "work discovered out of range is offered")
+  local m = probes[6].receive()
+  ok(m and m.from == 5 and m.topic == "found" and m.body == "chest at 99,0,0",
+     "and the message to another probe is delivered")
+  ok(probes[5].link().pending == 0 or (function()
+       tick(5); host.beat(clock); return probes[5].link().pending == 0 end)(),
+     "acknowledged, the outbox empties")
+
+  -- Re-sending never delivers twice.
+  probes[5].send(6, "ping", 1)
+  tick(5); host.beat(clock)
+  tick(5); probes[5].flush(true); probes[5].flush(true)
+  local pings = 0
+  while probes[6].receive(0, "ping") do pings = pings + 1 end
+  ok(pings == 1, "a re-sent message arrives once", pings)
+
+  -- Order survives loss: drop every other transmission.
+  local n = 0
+  local wire = probes[7].wire
+  local realSend = wire.send
+  wire.send = function(msg)
+    n = n + 1
+    if n % 2 == 0 then return true end
+    return realSend(msg)
+  end
+  for i = 1, 6 do probes[7].send(3, "seq", i) end
+  wire.send = realSend
+  for _ = 1, 4 do tick(5); host.beat(clock) end
+  local got = {}
+  while true do
+    local msg = probes[3].receive(0, "seq")
+    if not msg then break end
+    got[#got + 1] = msg.body
+  end
+  ok(table.concat(got, ",") == "1,2,3,4,5,6",
+     "half the transmissions lost, every message arrives in order",
+     table.concat(got, ","))
+
+  -- The operator reaches a running program, even one out of range.
+  inRange[4] = false
+  sb:deliver("operator", { 4 }, "recall", nil)
+  ok(probes[4].inbox() == 0 and sb:queued(4) == 1, "out of range, it waits on the host")
+  tick(5)
+  inRange[4] = true
+  host.beat(clock)
+  local r = probes[4].receive(0, "recall")
+  ok(r and r.from == "operator", "and arrives once the probe answers a heartbeat")
+  ok(sb:queued(4) == 0, "after which the host stops sending it")
+
+  -- A very long silence gives up the oldest output, never the news.
+  inRange[6] = false
+  local maxOut = probes[6].outboxMax
+  probes[6].outboxMax = 10
+  probes[6].finish("never-claimed")
+  for i = 1, 30 do probes[6].queue({ t = "output", text = "line " .. i }) end
+  ok(probes[6].link().pending <= 12, "the outbox stays bounded", probes[6].link().pending)
+  said = {}
+  tick(5); inRange[6] = true; host.beat(clock)
+  local lost
+  for _, l in ipairs(said) do if l:find("lost while out of range", 1, true) then lost = l end end
+  ok(lost ~= nil, "the host says output was lost", table.concat(said, " | "))
+  ok(sb.pool.done["never-claimed"], "and the finish queued before it still arrived")
+  probes[6].outboxMax = maxOut
+
+  -- A rebooted worker starts numbering again; the host follows -- from
+  -- message 1, even when 1 was lost and 2 arrived first.
+  probes[3].wire.session = 2
+  probes[3].reset()
+  local w3 = probes[3].wire
+  local send3 = w3.send
+  local dropFirst = true
+  w3.send = function(m)
+    if dropFirst then dropFirst = false; return true end
+    return send3(m)
+  end
+  probes[3].post("first", 1)
+  probes[3].post("state", "rebooted")
+  ok(not (sb.board[3] and sb.board[3].facts.state == "rebooted"),
+     "after a reboot, message 2 waits for the lost message 1")
+  w3.send = send3
+  tick(5); host.beat(clock)
+  ok(sb.board[3].facts.first == 1 and sb.board[3].facts.state == "rebooted",
+     "and both arrive once 1 is re-sent")
+
+  -- Leases: the job ending, or the worker going silent, returns work.
+  sb:reset()
+  probes[3].offer("x"); probes[3].offer("y"); probes[3].offer("z")
+  local a = probes[3].take()
+  local b = probes[4].take()
+  probes[4].finish(b)
+  host.handleStray(3, { t = "result", ok = false, error = "boom" })
+  ok(sb.pool.claims[a] == nil, "a job that ends returns what it did not finish")
+  ok(sb.pool.done[b], "but never what was finished")
+  local c = probes[5].take()
+  tick(200); host.handleStray(5, { t = "alive" })
+  ok(next(host.expireLeases(clock)) == nil, "a worker heard within the lease keeps its work")
+  tick(400)
+  host.expireLeases(clock)
+  ok(sb.pool.claims[c] == nil, "a silent one loses it")
+
+  -- The host restarts: work, queues and its numbering survive.
+  inRange[7] = false
+  sb:deliver("operator", { 7 }, "note", "kept")
+  local exported = sb:export()
+  host.configure({ protocol = "ccagent", claimLease = 300, resendAfter = 3 })
+  local fresh = host.switchboard()
+  ok(fresh:counts().open == 0 and fresh:queued(7) == 0, "a restarted host starts empty")
+  fresh:import(exported)
+  ok(fresh:queued(7) == 1 and fresh.pool.items.x ~= nil,
+     "and is whole again once its file is read")
+  inRange[7] = true
+  host.handleStray(7, { t = "alive", ack = probes[7].hostAck() })
+  local note = probes[7].receive(0, "note")
+  ok(note and note.body == "kept",
+     "a message queued before the restart is still delivered, once")
+
+  -- Acknowledged but never written down. The heartbeat tells a worker
+  -- "applied up to n", the worker throws those messages away, and the
+  -- host then restarts from a file older than n -- a save it had not got
+  -- round to yet, or a file it could not read back. The worker's next
+  -- message is n+1 and the host is waiting for an earlier one the worker
+  -- no longer has: without a way out, that worker is never heard again.
+  local disk = copy(host.switchboard():export()) -- what the file held
+  probes[6].post("a", 1)
+  probes[6].post("b", 2)
+  tick(5); host.beat(clock)
+  tick(5); host.beat(clock)                    -- acknowledged; discarded
+  ok(probes[6].link().pending == 0, "(the worker has let go of them)")
+  host.configure({ protocol = "ccagent", claimLease = 300, resendAfter = 3 })
+  host.switchboard():import(disk)              -- restart from the old file
+  probes[6].post("c", 3)
+  for _ = 1, 3 do tick(5); host.beat(clock) end
+  local b6 = host.switchboard().board[6]
+  ok(b6 and b6.facts.c == 3,
+     "a host restarted from an older file still hears the worker afterwards")
+  local toldLost = false
+  for _, l in ipairs(said) do
+    if l:find("lost: acknowledged, then forgotten", 1, true) then toldLost = true end
+  end
+  ok(toldLost, "and says that two messages were lost, rather than nothing")
+
+  -- Prevention: the heartbeat never acknowledges past what is on disk.
+  local savedLast, ackedN
+  local prevTU = _G.textutils
+  _G.textutils = {
+    serialize = function(t)
+      savedLast = t.rx and t.rx[6] and t.rx[6].last
+      return "saved"
+    end,
+    unserialize = prevTU.unserialize,
+  }
+  local bcast = _G.rednet.broadcast
+  _G.rednet.broadcast = function(msg)
+    if msg.t == "beat" then ackedN = msg.acks[6] and msg.acks[6].n end
+    return bcast(msg)
+  end
+  probes[6].post("d", 4)
+  tick(5); host.beat(clock)
+  ok(ackedN ~= nil and savedLast == ackedN,
+     "a heartbeat acknowledges only what has been saved",
+     tostring(savedLast) .. " vs " .. tostring(ackedN))
+  _G.rednet.broadcast = bcast
+
+  -- Saving replaces the file whole: written beside it, then moved in.
+  host.saveFleet()
+  host.saveFleet()
+  ok(mock.files["/.ccagent/fleet.dat"] == "saved" and
+     mock.files["/.ccagent/fleet.dat.new"] == nil,
+     "a save replaces the file and leaves nothing beside it")
+  -- Stopped between deleting the old file and moving the new one in.
+  mock.files["/.ccagent/fleet.dat.new"] = mock.files["/.ccagent/fleet.dat"]
+  mock.files["/.ccagent/fleet.dat"] = nil
+  local loadedFrom
+  _G.textutils.unserialize = function(text) loadedFrom = text; return {} end
+  host.loadFleet()
+  ok(loadedFrom == "saved", "an interrupted save is still found on restart")
+  _G.textutils = prevTU
+  mock.files["/.ccagent/fleet.dat.new"] = nil
+
+  -- The other direction: a worker that rebooted, with two operator
+  -- messages queued for it, and the first resend lost in the air.
+  inRange[4] = false
+  sb = host.switchboard()
+  sb:deliver("operator", { 4 }, "m", 1)
+  sb:deliver("operator", { 4 }, "m", 2)
+  probes[4].reset()                             -- rebooted: knows nothing
+  inRange[4] = true
+  local sends, realIoSend = 0, sb.io.send
+  sb.io.send = function(id, msg)
+    sends = sends + 1
+    if id == 4 and msg.hs and msg.hs.n == sb.tx[4].queue[1].n and sends == 1 then
+      return                                    -- the first one is lost
+    end
+    return realIoSend(id, msg)
+  end
+  tick(5)
+  sb:ackFrom(4, probes[4].hostAck(), 3000)      -- resend both, first lost
+  sb.io.send = realIoSend
+  ok(probes[4].inbox("m") == 0,
+     "a rebooted worker waits for the oldest queued message, not the first to arrive")
+  for _ = 1, 3 do tick(5); host.beat(clock) end
+  local m1, m2 = probes[4].receive(0, "m"), probes[4].receive(0, "m")
+  ok(m1 and m2 and m1.body == 1 and m2.body == 2 and probes[4].inbox("m") == 0,
+     "then gets both, in order, once")
+
+  for k, f in pairs(saved) do console[k] = f end
+  _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
+  os.epoch = prevEpoch
+end
+
+--------------------------------------------------------------------------
+group("fleet: alone, out of contact, and what the program is told")
+
+do
+  local fleet = require("agent.fleet")
+  local prompt = require("claude.prompt")
+  local clock = 1000000
+  local prevEpoch = os.epoch
+  os.epoch = function() return clock end
+  fleet.reset()
+
+  -- A fleet of one: the standalone controller has no wire at all.
+  fleet.wire = nil
+  ok(fleet.summary() == nil, "the standalone controller gets no link line")
+  fleet.offer("a", { pos = { x = 5, y = 0, z = 0 } })
+  fleet.offer("b", { pos = { x = 1, y = 0, z = 0 } })
+  local name = fleet.take({ near = { x = 0, y = 0, z = 0 } })
+  ok(name == "b", "alone, take still hands out the nearest", name)
+  fleet.finish("b")
+  ok(fleet.isDone("b") and fleet.work().open == 1, "and the pool is kept locally")
+  fleet.send(fleet.id(), "note", "to self")
+  ok((fleet.receive() or {}).body == "to self", "a message to yourself arrives")
+  ok(fleet.claim("anything") == true, "every claim succeeds")
+  fleet.reset()
+
+  local hostKnown = false
+  local sentMsgs = {}
+  fleet.wire = { id = 3, label = "probe-1", session = 1,
+                 connected = function() return hostKnown end,
+                 modem = function() return "wireless" end,
+                 send = function(m) sentMsgs[#sentMsgs + 1] = m; return true end }
+  ok(fleet.summary():find("no host", 1, true) ~= nil,
+     "a worker with no host is told it works alone")
+
+  hostKnown = true
+  fleet.heard(41.2, { x = 5, y = 0, z = -20 })
+  local line = fleet.summary()
+  ok(line:find("41 blocks", 1, true) and line:find("~64", 1, true),
+     "in contact: how far the host is, and how far a wireless modem reaches", line)
+
+  clock = clock + 45000
+  line = fleet.summary()
+  ok(line:find("LOST", 1, true) and line:find("5,0,-20", 1, true),
+     "silent past the lapse: lost, and where contact was last had", line)
+  ok(not fleet.connected(), "connected is false once contact lapsed")
+  sentMsgs = {}
+  local t0 = os.clock()
+  local got, err = fleet.claim("cell 1,1")
+  ok(got == nil and tostring(err):find("out of contact", 1, true),
+     "a claim out of contact is unknown, not granted", tostring(err))
+  local tname, _, tinfo = fleet.take()
+  ok(tname == nil and tinfo.reason == "contact", "and so is a take")
+  ok(#sentMsgs == 0 and os.clock() - t0 < 1, "both fail at once instead of waiting")
+  fleet.post("pos", { x = 1 })
+  ok(#sentMsgs == 0 and fleet.link().pending == 1,
+     "news out of contact waits in the outbox instead of being sent into the void")
+  ok(fleet.summary():find("waiting to send", 1, true) ~= nil,
+     "and the link line says so")
+  ok(fleet.link().lastContact.z == -20, "link() gives a program the way back")
+
+  fleet.heard(nil, nil, "ender")
+  ok(fleet.summary():find("no range limit", 1, true) ~= nil,
+     "an ender modem at the host lifts the limit for everyone")
+
+  -- A snapshot carries ages, so a probe that went silent an hour ago
+  -- does not arrive looking as fresh as one that posted a second ago.
+  fleet.deliver({ t = "fleet", kind = "snapshot",
+                  board = { [7] = { label = "probe-2", age = 3600, facts = { pos = 1 } } },
+                  pool = { items = {}, claims = { ["cell 2,2"] = 7 },
+                           done = { ["cell 2,2"] = true } } })
+  ok(fleet.board()[7].age >= 3600, "board ages survive a snapshot", fleet.board()[7].age)
+  ok(fleet.isDone("cell 2,2"), "and so does finished work")
+
+  -- What the model is told, and where.
+  local withFleet = select(2, prompt.system({ fleet = true, cache = false }))
+  local without   = select(2, prompt.system({ cache = false }))
+  ok(withFleet:find("WORKING IN A FLEET", 1, true) ~= nil,
+     "the host's prompt carries the fleet guidance")
+  ok(without:find("WORKING IN A FLEET", 1, true) == nil,
+     "the standalone controller's does not")
+  local session = require("claude.session")
+  ok(session.new({}, {}, nil, { fleet = true }).fleet == true and
+     session.new({}, {}, nil).fleet == false,
+     "a session knows which prompt it should build")
+  local man = agent.registry.manifest()
+  for _, fn in ipairs({ "take", "offer", "send", "receive", "relay" }) do
+    ok(man:find("fleet." .. fn .. "(", 1, true) ~= nil, "fleet." .. fn .. " is in the manifest")
+  end
+
+  -- The ender modem is told apart by its item, which the game can name.
+  mock.turtle.equipped = { left = "computercraft:wireless_modem_advanced" }
+  ok(caps.detect(true).enderModem == true, "an ender modem is recognised")
+  mock.turtle.equipped = { left = "computercraft:wireless_modem_normal" }
+  ok(caps.detect(true).enderModem == false, "and a normal one is not")
+  mock.turtle.equipped = nil
+  caps.detect(true)
+
+  -- Relaying, as CC's repeat program does it.
+  local net = require("ui.net")
+  local seen = {}
+  local pkt = { nMessageID = 42, nRecipient = 7, message = "x" }
+  ok(net.repeatTarget(net.CHANNEL_REPEAT, pkt, seen, 0) == 7,
+     "a relay forwards a rednet packet to its recipient")
+  ok(net.repeatTarget(net.CHANNEL_REPEAT, pkt, seen, 1000) == nil,
+     "once: the same message id is not repeated again")
+  ok(net.repeatTarget(net.CHANNEL_REPEAT, pkt, seen, 40000) == 7,
+     "until it has been forgotten (30s), as repeat.lua does")
+  ok(net.repeatTarget(7, { nMessageID = 43, nRecipient = 7 }, seen, 0) == nil,
+     "only what was heard on the repeat channel")
+  ok(net.repeatTarget(net.CHANNEL_REPEAT,
+       { nMessageID = 44, nRecipient = net.CHANNEL_BROADCAST }, seen, 0)
+     == net.CHANNEL_BROADCAST, "broadcasts stay broadcasts")
+
+  fleet.wire = nil
+  fleet.reset()
+  os.epoch = prevEpoch
+end
+
+--------------------------------------------------------------------------
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

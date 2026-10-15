@@ -266,6 +266,41 @@ job.report({ placed = placed })
 
 --- Assemble the system blocks. Returns the array form the API expects,
 --- with cache_control on the final (and only) static block.
+--- Only in prompts built by the fleet host, whose every program runs on a
+--- worker. Static per session, so it sits in the cached prefix; the live
+--- part (is the host in range right now) is the "link:" line of CURRENT
+--- STATE, which is per request.
+prompt.FLEET = [[
+WORKING IN A FLEET
+This program runs on one of any number of turtles driven by the same
+host -- write it so it works the same with one turtle or twenty, without
+knowing how many there are. `fleet` is how they share work and talk.
+- Share work through the pool. Every turtle may fleet.offer the same
+  pieces (repeats are ignored) -- e.g. a grid of cells with data.pos --
+  then loop: local name, data, info = fleet.take(); work it;
+  fleet.finish(name). Offer new pieces you discover along the way.
+  When take returns nil: info.reason "none" with info.taken > 0 means
+  others are still working and pieces may come back -- job.sleep and
+  retry a few times before finishing; "contact" means out of range.
+  fleet.claim(name) is for one specific piece you chose yourself.
+- Work you take and do not finish goes back to the pool when this
+  program ends; fleet.release it yourself if you give up on it early.
+- fleet.post small facts (position, progress) every so often; read the
+  others with fleet.board(). fleet.send(id or "all", topic, body) and
+  fleet.receive(0, topic) for messages; they are delivered in order and
+  held while out of range.
+- Check fleet.receive(0, "recall") inside your main loop: the operator
+  sends it (/fleet tell all recall) to bring everyone home. On a recall,
+  stop working, release what you hold, and go home.
+- Range: CURRENT STATE has a "link:" line. Unless it says there is no
+  range limit, the host is reachable only within ~64 blocks below y=96.
+  Out of range nothing is lost, only delayed, but take/claim fail; check
+  fleet.link() before heading further away and nav.moveTo(
+  fleet.link().lastContact, ...) to reconnect. A turtle parked mid-way
+  with fleet.relay(true) extends the reach for the others.
+- Positions on the board mean the same thing only when the turtles
+  share a frame (GPS, or aligned by the operator).]]
+
 function prompt.system(opts)
   opts = opts or {}
   local parts = {
@@ -287,6 +322,7 @@ function prompt.system(opts)
 
   parts[#parts + 1] = prompt.CONTRACT
   parts[#parts + 1] = prompt.EXAMPLES
+  if opts.fleet then parts[#parts + 1] = prompt.FLEET end
 
   if opts.extra and opts.extra ~= "" then
     parts[#parts + 1] = "OPERATOR NOTES\n" .. opts.extra
@@ -375,6 +411,23 @@ end
 
 --- What we send back after a run fails, so the next attempt is a repair
 --- rather than a fresh guess.
+--- A program that names something the sandbox does not have. Sent before
+--- it runs, so there is no error and no output to quote -- only the list.
+function prompt.missing(findings)
+  local lines = {}
+  for _, f in ipairs(findings) do
+    lines[#lines + 1] = ("  line %s: %s"):format(tostring(f.line or "?"),
+                                                 tostring(f.detail or f.kind))
+  end
+  return "That program was not run. It refers to names that do not exist "
+      .. "in this sandbox, so it would have failed partway through, after "
+      .. "acting on the world:\n\n" .. table.concat(lines, "\n")
+      .. "\n\nThe API listing in the system prompt is the whole surface -- "
+      .. "there is nothing beyond it, and a function that is not listed "
+      .. "does not exist. Reply with a corrected program using only listed "
+      .. "calls. Same format: one ```lua block."
+end
+
 function prompt.failure(err, output)
   local s = "The program failed.\n\nError:\n" .. tostring(err)
   if output and output ~= "" then

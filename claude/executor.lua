@@ -146,6 +146,39 @@ function executor.sandbox(apiEnv)
   return env
 end
 
+--- Every global name a program may reach, asked of the sandbox rather
+--- than listed. A hand-kept list of the allowed names is a list that
+--- drifts from the environment it claims to describe -- and drifts
+--- silently in the direction that matters, since a name the sandbox
+--- dropped stays "allowed" and a static check built on it stops seeing
+--- the one mistake it exists to catch.
+---
+--- agent/lib.lua keeps its own list for routines on purpose: a routine
+--- also sees `args`, which a one-off program never does.
+function executor.globalNames(apiEnv)
+  local names = {}
+  for k in pairs(executor.sandbox(apiEnv or {})) do
+    if type(k) == "string" then names[k] = true end
+  end
+  return names
+end
+
+--- The same surface, but the tables themselves, for a check that asks
+--- whether a field exists rather than whether a name does.
+---
+--- Worth noting what this being the LIVE sandbox buys: the answer comes
+--- from the machine the program will run on. `table.unpack` exists under
+--- the lua5.3 the tests use and does not exist under CC's Cobalt, so a
+--- program reaching for it is clean here and flagged in-game, which is
+--- the only place the answer matters.
+function executor.globalTables(apiEnv)
+  local tables = {}
+  for k, v in pairs(executor.sandbox(apiEnv or {})) do
+    if type(k) == "string" and type(v) == "table" then tables[k] = v end
+  end
+  return tables
+end
+
 ---------------------------------------------------------------- running ---
 
 local function annotate(code, err)

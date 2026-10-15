@@ -17,6 +17,7 @@ local client   = require("claude.client")
 local prompt   = require("claude.prompt")
 local extract  = require("claude.extract")
 local executor = require("claude.executor")
+local lint     = require("agent.lint")
 
 local session = {}
 session.__index = session
@@ -29,7 +30,7 @@ session.maxTurns = 8
 --- that reports a remote turtle's state and refuses to execute locally.
 --- `runner` is how a program gets executed -- locally by default, over
 --- rednet in host mode. The repair loop works either way.
-function session.new(cfg, agent, runner)
+function session.new(cfg, agent, runner, opts)
   return setmetatable({
     cfg      = cfg,
     agent    = agent,
@@ -38,6 +39,7 @@ function session.new(cfg, agent, runner)
     system   = nil,
     lastCode = nil,
     lastResult = nil,
+    fleet    = opts and opts.fleet or false,
     stats    = { requests = 0, inTokens = 0, outTokens = 0,
                  cacheRead = 0, cacheWrite = 0 },
   }, session)
@@ -55,6 +57,7 @@ function session:buildSystem(force)
   local blocks = prompt.system({
     extra = self.cfg.operatorNotes,
     cache = self.cfg.cache ~= false,
+    fleet = self.fleet,
   })
   self.system = blocks
   self.listingVersion = version
@@ -130,6 +133,51 @@ function session:ask(text, opts)
                  thinking = resp.thinking }
 end
 
+--- How many times a program may be sent back for naming something that
+--- does not exist. One: the answer is in the system prompt's own API
+--- listing, so a model that gets it wrong twice is not going to get it
+--- right on the third pass, and each attempt is a whole request.
+session.staticRepairs = 1
+
+--- The global surface of the machine that will run the program: the
+--- names, and the tables behind them.
+---
+--- nil when it cannot be known from here, which is the host's case by
+--- design -- its agent proxy raises on env(), because the program runs
+--- on a worker whose capabilities, and therefore whose sandbox, are not
+--- the host's to describe. A fleet therefore gets no static gate rather
+--- than a gate answering about the wrong machine.
+local function surface(self)
+  local okEnv, apiEnv = pcall(self.agent.env)
+  if not okEnv or type(apiEnv) ~= "table" then return nil end
+  local okNames, names = pcall(executor.globalNames, apiEnv)
+  if not okNames then return nil end
+  local _, tables = pcall(executor.globalTables, apiEnv)
+  return names, tables
+end
+
+--- Findings that are facts rather than predictions: a bare name, or a
+--- field on a real namespace, that is not there. Lua resolves both at
+--- the moment the line runs, so the program starts, works, changes the
+--- world and only then dies -- which is why this is worth a round trip
+--- before the first move rather than a repair after thirty blocks.
+---
+--- Everything else the lint reports is a judgement about style or about
+--- a contract, and is not grounds for refusing to run anything.
+function session:staticErrors(code)
+  local names, tables = surface(self)
+  if not names then return {} end
+  local ok, findings = pcall(lint.check, code, names, tables)
+  if not ok then return {} end
+  local out = {}
+  for _, f in ipairs(findings) do
+    if f.kind == "undefined-global" or f.kind == "unknown-member" then
+      out[#out + 1] = f
+    end
+  end
+  return out
+end
+
 --- Execute a program wherever this session runs programs.
 function session:execute(code, opts)
   if self.runner then return self.runner(code, opts) end
@@ -157,6 +205,41 @@ function session:handle(text, opts)
 
   if opts.dryRun then
     return { ok = true, code = code, dryRun = true }
+  end
+
+  -- Before anything moves. extract.check already refuses a program that
+  -- will not parse; this refuses one that parses and then cannot work.
+  local static = self:staticErrors(code)
+  local staticTries = 0
+  while #static > 0 do
+    for n, f in ipairs(static) do
+      if n > 3 then                       -- 39 columns, no scrollback
+        emit("warn", ("+%d more"):format(#static - 3))
+        break
+      end
+      emit("warn", ("line %s: %s"):format(tostring(f.line or "?"),
+                                          tostring(f.detail)))
+    end
+    if staticTries >= (self.cfg.staticRepairs or session.staticRepairs) then
+      -- Not run, and said plainly. Running it anyway would change the
+      -- world up to the bad line for nothing.
+      local why = ("names that do not exist: %s"):format(
+        tostring(static[1] and static[1].detail or "?"))
+      emit("warn", "not run")
+      return { ok = false, error = why, code = code, notRun = true }
+    end
+    staticTries = staticTries + 1
+    emit("status", "that names something missing; asking again...")
+    local fixCode, fixMeta = self:ask(prompt.missing(static),
+                                      { withState = false })
+    if not fixCode then
+      emit("warn", "repair request failed: " .. tostring(fixMeta))
+      return { ok = false, error = tostring(fixMeta), code = code }
+    end
+    if fixMeta.usage then emit("usage", client.usageLine(fixMeta.usage), fixMeta.usage) end
+    code = fixCode
+    emit("code", code)
+    static = self:staticErrors(code)
   end
 
   local attempt, result = 0, nil

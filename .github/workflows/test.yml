@@ -1,0 +1,121 @@
+# What checks the deployment target, and what cannot.
+#
+# The tests run under lua5.3. The real runtime is CC:Tweaked's Cobalt --
+# roughly 5.1, plus backports -- so a 5.2/5.3-only feature passes the
+# suite and fails in-game.
+#
+# Running the suite under lua5.1 looked like the answer and is not.
+# Cobalt is 5.1 PLUS backports, so plain 5.1 is stricter than the target
+# in ways that matter: it rejects load(src, name, "t", env), the
+# four-argument form the sandbox depends on, while CC:Tweaked's own rom
+# uses that form throughout and contains no setfenv at all. A job that
+# fails on code the game runs happily is a job that gets ignored.
+#
+# So the target is checked in two narrower ways that only ever reject
+# what Cobalt also rejects:
+#
+#   luac5.1 -p   syntax-level differences -- // , bitwise operators, goto
+#   the suite    library surface (table.unpack, utf8), in test/run_install
+#
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    name: tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install lua
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends lua5.3 lua5.1
+
+      # Every tracked .lua, not just what the suite requires. Both front
+      # ends, ui/net, the bootstrapper and the shipped config are loaded
+      # by no test, so until now a stray `end` in ui/host.lua passed the
+      # suite and failed on a turtle.
+      #
+      # Under BOTH parsers: 5.3 is what contributors run, and 5.1 is the
+      # closest available parser to Cobalt's grammar, so it is what
+      # rejects `//`, a bitwise operator or a `goto` before a turtle does.
+      - name: parse every file
+        run: |
+          fail=0
+          for f in $(git ls-files '*.lua'); do
+            for v in 5.3 5.1; do
+              luac$v -p "$f" || { echo "parse failed under $v: $f"; fail=1; }
+            done
+          done
+          exit $fail
+
+      - name: suite
+        run: lua5.3 test/all.lua
+
+  history:
+    runs-on: ubuntu-latest
+    name: nothing private in the history
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the grep is over all of it, not the tip
+          # On a pull_request event checkout defaults to refs/pull/N/merge
+          # -- a merge commit GitHub synthesises, authored by whoever
+          # opened the PR. That commit is not in the history and never
+          # will be, so scanning it reported a leak in a commit that does
+          # not exist. Take the real head instead; on a push event this
+          # expression is empty and the default applies.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # The check CLAUDE.md asks for before every push, which until now
+      # ran only when somebody remembered. A leak caught on a branch is a
+      # branch to rewrite; caught after merge it is public and permanent.
+      #
+      # What it catches: email addresses, handles carrying a domain, and
+      # session or conversation links. What it does NOT catch: a bare
+      # hostname, an IP, a world seed, or base coordinates -- no pattern
+      # for those survives contact with ordinary prose and a repo whose
+      # own source mentions paste.rs and raw.githubusercontent.com. A
+      # green check here is not "no identifying details"; it is "none of
+      # the three mechanically findable kinds". The rest is still a
+      # judgement call every commit message needs.
+      - name: no secrets, addresses or session links in commits
+        run: |
+          # Two rules, because the two halves of a commit carry different
+          # risk. Message BODIES are what gets written here, so they are
+          # the surface a leak actually reaches. AUTHOR lines are metadata
+          # git requires and the repository owner chooses; policing their
+          # content is not this check's job, but an author line carrying a
+          # real address instead of a forge's privacy alias is still worth
+          # catching.
+          fail=0
+
+          # Bodies. The permitted address is stripped rather than its line
+          # dropped, so a second address beside the trailer cannot hide
+          # behind it.
+          bodies=$(git log --format='%B' \
+                   | sed 's/noreply@anthropic\.com//g' \
+                   | grep -niE 'session_|claude\.ai/code|@[a-z0-9.-]+\.[a-z]{2,}' || true)
+          if [ -n "$bodies" ]; then
+            echo "in a commit message:"; echo "$bodies"; fail=1
+          fi
+
+          # Authors. noreply@anthropic.com and a forge privacy alias
+          # (<handle>@users.noreply.github.com) are both addresses that
+          # exist so a real one is not published; anything else is one.
+          authors=$(git log --format='%an <%ae>' | sort -u \
+                    | grep -viE '<noreply@anthropic\.com>|@users\.noreply\.github\.com' || true)
+          if [ -n "$authors" ]; then
+            echo "an author line carries a real address:"; echo "$authors"; fail=1
+          fi
+
+          if [ $fail -ne 0 ]; then
+            echo
+            echo "See CLAUDE.md 'Never commit'."
+            exit 1
+          fi
+          echo "clean"

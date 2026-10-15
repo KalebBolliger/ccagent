@@ -129,9 +129,42 @@ function lint.locals(code)
   return set
 end
 
+--- Names the program itself assigns at the top level. A global it wrote
+--- is a global it can read, so these are defined as surely as the
+--- sandbox's own.
+---
+--- Skipping only the assignment itself was not enough, and the gap was
+--- the shape a counter takes:
+---
+---     placed = 0
+---     placed = placed + 1
+---
+--- The first `placed` is a binding target and was skipped; so is the
+--- first on line two -- but the second is a read, and it was reported as
+--- a name that is not in the sandbox. A program doing the most ordinary
+--- thing in Lua was therefore one finding away from being refused by
+--- anything that gates on this.
+---
+--- Assignment ORDER is not checked. A read before the first assignment
+--- really is nil at runtime, but deciding that statically means knowing
+--- when each function runs, and a rule that guesses would land on
+--- exactly the programs that assign in one function and read in another.
+function lint.assigned(code)
+  local set = {}
+  for name in code:gmatch("([%a_][%w_]*)%s*=[^=]") do set[name] = true end
+  for list in code:gmatch("([%a_][%w_,%s]*)%s*=[^=]") do
+    -- `a, b = f()` binds both.
+    if list:find(",", 1, true) then
+      for name in list:gmatch("[%a_][%w_]*") do set[name] = true end
+    end
+  end
+  return set
+end
+
 --- Identifiers used as globals (not preceded by `.` or `:`).
 function lint.globals(code)
   local locals = lint.locals(code)
+  local assigned = lint.assigned(code)
   local seen = {}
   local pos = 1
   while true do
@@ -145,7 +178,7 @@ function lint.globals(code)
     local nextTwo = code:sub(e + 1):match("^%s*(==?)") or ""
     local isBindingTarget = nextTwo == "="
     if prev ~= "." and prev ~= ":" and not KEYWORDS[name]
-       and not locals[name] and not isBindingTarget then
+       and not locals[name] and not assigned[name] and not isBindingTarget then
       seen[name] = (seen[name] or 0) + 1
     end
   end
@@ -173,7 +206,9 @@ end
 ---   { kind, line, detail }
 --- `allowed` is the set of names legitimately in the sandbox (pass
 --- registry.environment() keys plus the standard-library names).
-function lint.check(src, allowed)
+--- `tables` maps those names to the live tables, enabling the member
+--- check; omit it and that check is skipped.
+function lint.check(src, allowed, tables)
   allowed = allowed or {}
   local code = lint.strip(src)
   local findings = {}
@@ -260,6 +295,54 @@ function lint.check(src, allowed)
     if not s then break end
     p4 = e + 1
     add("calls-library", s, name)
+  end
+
+  -- 5b. A field that does not exist on a namespace that does.
+  --
+  --    This is the check that catches the mistake actually made. Check 5
+  --    only looks at bare names, so `inv.fuel()` passes it: `inv` exists,
+  --    and `fuel` is preceded by a dot and never examined. A call to a
+  --    function that was never written is indistinguishable from a
+  --    correct one until the line is reached, by which point the turtle
+  --    has dug thirty blocks.
+  --
+  --    Unlike every other check in this file this one is not a
+  --    heuristic: the table is right here and the key is either in it or
+  --    not. What makes it safe is the exemptions, and each is a real
+  --    case rather than caution:
+  --
+  --      turtle   its surface is deliberately dynamic. turtle.craft does
+  --               not exist until a crafting table is equipped, which is
+  --               the whole point of carrying one, so a program that
+  --               equips and then crafts would be refused.
+  --      _G/_ENV  the environment itself; reaching a name through it is
+  --               how you reach a name at all.
+  --      a local  `local nav = {}` makes nav.anything the program's own
+  --               table, nothing to do with the namespace.
+  --      assigned `job.myFlag = 1` creates the field, so reading it back
+  --               is correct. The sandbox hands out the live module
+  --               tables precisely so a program can do this.
+  if tables then
+    local locals = lint.locals(code)
+    local assigned = {}
+    for ns, field in code:gmatch("([%a_][%w_]*)%s*%.%s*([%a_][%w_]*)%s*=[^=]") do
+      assigned[ns .. "." .. field] = true
+    end
+    local p5 = 1
+    while true do
+      local s, e, ns, field = code:find("([%a_][%w_]*)%s*%.%s*([%a_][%w_]*)", p5)
+      if not s then break end
+      -- Advance past the namespace only, not the field: in `a.b.c` the
+      -- field of one pair is the namespace of the next.
+      p5 = s + #ns
+      local t = tables[ns]
+      if t and ns ~= "turtle" and ns ~= "_G" and ns ~= "_ENV"
+         and not locals[ns] and not assigned[ns .. "." .. field]
+         and type(t) == "table" and t[field] == nil then
+        add("unknown-member", s,
+            ("%s has no %s"):format(ns, field))
+      end
+    end
   end
 
   -- 5. Globals that will not exist in the sandbox.
