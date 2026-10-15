@@ -30,7 +30,7 @@ session.maxTurns = 8
 --- that reports a remote turtle's state and refuses to execute locally.
 --- `runner` is how a program gets executed -- locally by default, over
 --- rednet in host mode. The repair loop works either way.
-function session.new(cfg, agent, runner)
+function session.new(cfg, agent, runner, opts)
   return setmetatable({
     cfg      = cfg,
     agent    = agent,
@@ -39,6 +39,7 @@ function session.new(cfg, agent, runner)
     system   = nil,
     lastCode = nil,
     lastResult = nil,
+    fleet    = opts and opts.fleet or false,
     stats    = { requests = 0, inTokens = 0, outTokens = 0,
                  cacheRead = 0, cacheWrite = 0 },
   }, session)
@@ -56,6 +57,7 @@ function session:buildSystem(force)
   local blocks = prompt.system({
     extra = self.cfg.operatorNotes,
     cache = self.cfg.cache ~= false,
+    fleet = self.fleet,
   })
   self.system = blocks
   self.listingVersion = version

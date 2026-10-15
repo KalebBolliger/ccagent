@@ -136,6 +136,24 @@ is not. `/fleet` on the host shows what was posted and who holds what;
 `/fleet reset` clears both before a new expedition. On the standalone
 controller every claim succeeds, so the same program runs as a fleet of one.
 
+A claim lasts while the job that took it runs. `fleet.finish(name)` keeps
+it for good; anything unfinished goes back to the pool when the job ends,
+or when the worker has not been heard from for five minutes (`claimLease`).
+The host keeps the board and claims on disk, so a host restart does not
+lose them.
+
+**Range.** Rednet is fire-and-forget: out of range, output and posts are
+lost without an error. A normal wireless modem reaches 64 blocks below
+y=96, rising to 384 at build height; an ender modem has no limit, and a
+message arrives within the *larger* of the two ends' ranges, so one ender
+modem at the host covers every worker. Set `hostModem = "ender"` in the
+host's `/ccagent/config.lua` if it has one -- the game cannot tell a
+program which kind a computer has. The host sends a heartbeat every ten
+seconds; each worker tracks when it last heard it, how far away it was,
+and where it stood, and `fleet.link()` and the `link:` line of its state
+say so. A computer running CC's built-in `repeat` program between the
+host and the workers relays rednet and extends the reach.
+
 Positions are only comparable if the turtles share a frame. With GPS they
 do. Without it, place them facing the same way and give each its offset
 from the host: `/forget 1 0,0,0`, `/forget 2 1,0,0`, `/forget 3 2,0,0` —
@@ -731,7 +749,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 754
+`lua5.3 test/all.lua` runs the three suites against a mock world — 779
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

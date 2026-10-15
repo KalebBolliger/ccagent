@@ -2092,7 +2092,7 @@ group("fleet: probes split work through the host")
 do
   local fleet = require("agent.fleet")
   fleet.reset()
-  fleet.link = nil
+  fleet.wire = nil
   ok(fleet.claim("north wing") == true, "with no host every claim succeeds")
   fleet.post("pos", { x = 1, y = 0, z = 2 })
   local b = fleet.board()
@@ -2123,7 +2123,7 @@ do
   fleet.reset()
   host.handleStray(3, { t = "hello", label = "probe-1" })
   host.handleStray(7, { t = "hello", label = "probe-2" })
-  fleet.link = { id = 3, label = "probe-1",
+  fleet.wire = { id = 3, label = "probe-1",
                  send = function(m) host.handleStray(3, m); return true end }
   toWorker = {}
 
@@ -2171,9 +2171,175 @@ do
   ok(man:find("fleet.claim(", 1, true) ~= nil, "fleet.claim is in the manifest")
 
   for k, f in pairs(saved) do console[k] = f end
-  fleet.link = nil
+  fleet.wire = nil
   fleet.reset()
   _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
+end
+
+--------------------------------------------------------------------------
+group("fleet: contact, leases, and what the program is told")
+
+-- Rednet is fire-and-forget, and a wireless modem below y=96 reaches 64
+-- blocks (CC:Tweaked WirelessModemPeripheral.getRange). A probe that has
+-- walked out of range loses its output and its posts without any error,
+-- so contact has to be measured, said out loud, and acted on.
+do
+  local fleet = require("agent.fleet")
+  local prompt = require("claude.prompt")
+  local clock = 1000000
+  local prevEpoch = os.epoch
+  os.epoch = function() return clock end
+  fleet.reset()
+
+  fleet.wire = nil
+  ok(fleet.summary() == nil, "the standalone controller gets no link line")
+
+  local hostKnown = false
+  local sentMsgs = {}
+  fleet.wire = { id = 3, label = "probe-1",
+                 connected = function() return hostKnown end,
+                 modem = function() return "wireless" end,
+                 send = function(m) sentMsgs[#sentMsgs + 1] = m; return true end }
+  ok(fleet.summary():find("no host", 1, true) ~= nil,
+     "a worker with no host is told it works alone")
+
+  hostKnown = true
+  fleet.heard(41.2, { x = 5, y = 0, z = -20 })
+  local line = fleet.summary()
+  ok(line:find("41 blocks", 1, true) and line:find("~64", 1, true),
+     "in contact: how far the host is, and how far a wireless modem reaches", line)
+  ok(fleet.connected(), "and connected says so")
+
+  clock = clock + 45000
+  line = fleet.summary()
+  ok(line:find("LOST", 1, true) and line:find("5,0,-20", 1, true),
+     "silent past the lapse: lost, and where contact was last had", line)
+  ok(not fleet.connected(), "connected is false once contact lapsed")
+  local t0 = os.clock()
+  local got, err = fleet.claim("cell 1,1")
+  ok(got == nil and tostring(err):find("out of contact", 1, true),
+     "a claim out of contact is unknown, not granted", tostring(err))
+  ok(#sentMsgs == 0 and os.clock() - t0 < 1,
+     "and fails at once instead of waiting out the timeout")
+  ok(fleet.link().lastContact.z == -20,
+     "link() gives a program the way back")
+
+  fleet.heard(nil, nil, "ender")
+  ok(fleet.summary():find("no range limit", 1, true) ~= nil,
+     "an ender modem at the host lifts the limit for everyone")
+  ok(fleet.link().unlimited, "and link().unlimited says so")
+
+  -- A snapshot carries ages, so a probe that went silent an hour ago
+  -- does not arrive looking as fresh as one that posted a second ago.
+  fleet.deliver({ t = "fleet", kind = "snapshot",
+                  board = { [7] = { label = "probe-2", age = 3600, facts = { pos = 1 } } },
+                  claims = { ["cell 2,2"] = 7 }, done = { ["cell 2,2"] = true } })
+  ok(fleet.board()[7].age >= 3600, "board ages survive a snapshot", fleet.board()[7].age)
+  ok(fleet.isDone("cell 2,2"), "and so does finished work")
+
+  -- What the model is told, and where.
+  local withFleet = select(2, prompt.system({ fleet = true, cache = false }))
+  local without   = select(2, prompt.system({ cache = false }))
+  ok(withFleet:find("WORKING IN A FLEET", 1, true) ~= nil,
+     "the host's prompt carries the fleet guidance")
+  ok(without:find("WORKING IN A FLEET", 1, true) == nil,
+     "the standalone controller's does not")
+  local session = require("claude.session")
+  ok(session.new({}, {}, nil, { fleet = true }).fleet == true and
+     session.new({}, {}, nil).fleet == false,
+     "a session knows which prompt it should build")
+
+  -- The ender modem is told apart by its item, which the game can name.
+  mock.turtle.equipped = { left = "computercraft:wireless_modem_advanced" }
+  ok(caps.detect(true).enderModem == true, "an ender modem is recognised")
+  mock.turtle.equipped = { left = "computercraft:wireless_modem_normal" }
+  ok(caps.detect(true).enderModem == false, "and a normal one is not")
+  mock.turtle.equipped = nil
+  caps.detect(true)
+
+  fleet.wire = nil
+  fleet.reset()
+  os.epoch = prevEpoch
+end
+
+do
+  -- The host side: claims end, and survive the host.
+  local fleet = require("agent.fleet")
+  local prevRednet, prevTest, prevId = _G.rednet, _G._TEST, os.getComputerID
+  local clock = 5000000
+  local prevEpoch = os.epoch
+  os.epoch = function() return clock end
+  _G.rednet = { send = function() end, broadcast = function() end,
+                receive = function() return nil end }
+  _G._TEST = true
+  os.getComputerID = prevId or function() return 1 end
+  local host = require("ui.host")
+  host.configure({ protocol = "ccagent", claimLease = 300 })
+  local console = require("ui.console")
+  local saved = {}
+  for _, k in ipairs({ "say", "warn", "err", "head", "dim" }) do
+    saved[k] = console[k]; console[k] = function() end
+  end
+  host.fleetReset()
+  host.handleStray(3, { t = "hello", label = "probe-1" })
+  host.handleStray(7, { t = "hello", label = "probe-2" })
+
+  host.handleStray(3, { t = "claim", name = "a", req = "3:1" })
+  host.handleStray(3, { t = "claim", name = "b", req = "3:2" })
+  host.handleStray(3, { t = "finish", name = "b" })
+  host.handleStray(7, { t = "claim", name = "b", req = "7:1" })
+  local _, claimsNow, doneNow = host.fleetState()
+  ok(claimsNow.b == 3 and doneNow.b, "finished work stays with whoever did it")
+
+  host.handleStray(3, { t = "result", ok = false, error = "boom" })
+  _, claimsNow = host.fleetState()
+  ok(claimsNow.a == nil and claimsNow.b == 3,
+     "a job that ends returns what it did not finish, and only that")
+
+  host.handleStray(7, { t = "claim", name = "c", req = "7:2" })
+  clock = clock + 200 * 1000
+  host.handleStray(3, { t = "alive" })
+  local expired = host.expireLeases(clock)
+  ok(next(expired) == nil, "a worker heard within the lease keeps its claims")
+  clock = clock + 200 * 1000
+  host.handleStray(3, { t = "alive" })
+  expired = host.expireLeases(clock)
+  _, claimsNow = host.fleetState()
+  ok(expired[7] and claimsNow.c == nil,
+     "a worker silent past the lease loses its unfinished claims")
+
+  -- Persistence: what a host restart would otherwise wipe. Real CC
+  -- serialises Lua tables (numeric ids stay numbers); the mock's
+  -- textutils is JSON, so stand in a Lua serialiser for this round trip.
+  local function ser(v)
+    if type(v) == "table" then
+      local parts = {}
+      for k, x in pairs(v) do parts[#parts + 1] = "[" .. ser(k) .. "]=" .. ser(x) end
+      return "{" .. table.concat(parts, ",") .. "}"
+    elseif type(v) == "string" then return ("%q"):format(v) end
+    return tostring(v)
+  end
+  local prevTU = _G.textutils
+  _G.textutils = { serialize = ser,
+                   unserialize = function(s) return load("return " .. s)() end }
+  host.handleStray(7, { t = "claim", name = "d", req = "7:3" })
+  host.saveFleet()
+  local h = fs.open("/.ccagent/fleet.dat", "r")
+  local onDisk = h and h.readAll()
+  if h then h.close() end
+  host.fleetReset()                    -- memory gone (and the file emptied)
+  h = fs.open("/.ccagent/fleet.dat", "w"); h.write(onDisk or ""); h.close()
+  _, claimsNow = host.fleetState()
+  ok(claimsNow.d == nil, "a restarted host starts empty")
+  ok(host.loadFleet(), "fleet state is read back from disk")
+  _, claimsNow = host.fleetState()
+  ok(claimsNow.d == 7, "with its claims intact", tostring(claimsNow.d))
+  _G.textutils = prevTU
+
+  for k, f in pairs(saved) do console[k] = f end
+  host.fleetReset()
+  _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
+  os.epoch = prevEpoch
 end
 
 --------------------------------------------------------------------------

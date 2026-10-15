@@ -43,8 +43,20 @@ local jobSeq  = 0
 -- and who holds each claimed piece of work. The host is the only place
 -- these are decided, which is what makes a claim safe: it handles one
 -- message at a time, so two workers can never both be granted a name.
-local fleetBoard  = {}   -- [id] = { label=, facts = {key=value} }
+local fleetBoard  = {}   -- [id] = { label=, at=ms, facts = {key=value} }
 local fleetClaims = {}   -- [name] = id
+local fleetDone   = {}   -- [name] = true: finished, never handed out again
+
+-- Kept on disk because the host is a computer in a chunk like any other:
+-- an unload wipes memory, and a fleet that forgets its claims sends the
+-- next probe into a wing that was already searched.
+local FLEET_FILE = "/.ccagent/fleet.dat"
+
+-- True while listen() runs. rednet delivers every message to every
+-- coroutine waiting for one, so with the listener up, a second handler
+-- in remoteRun or net.await handles the same message twice -- a claim
+-- answered twice, a post relayed twice, a line printed twice.
+local listening = false
 
 --------------------------------------------------------------- plumbing ---
 
@@ -105,17 +117,15 @@ local function remoteRun(id)
         elseif msg.t == "result" and msg.job == jobId then
           if msg.situation and workers[id] then workers[id].situation = msg.situation end
           busyWith[id] = nil
+          M.jobEnded(id)
           return {
             ok = msg.ok, error = msg.error, output = msg.output,
             result = msg.result, aborted = msg.aborted, elapsed = msg.elapsed,
           }
-        elseif msg.t ~= "result" then
-          -- A running program's fleet traffic (claims, posts) comes from
-          -- the very worker this loop is pumping; dropping it here left
-          -- its claims unanswered until they timed out.
+        elseif msg.t ~= "result" and not listening then
           M.handleStray(from, msg)
         end
-      elseif from and msg then
+      elseif from and msg and not listening then
         M.handleStray(from, msg)
       end
     end
@@ -137,7 +147,10 @@ local function sessionFor(id)
       end,
       env = function() error("the host does not execute programs", 0) end,
     }
-    w.session = session.new(cfg, proxy, remoteRun(id))
+    -- fleet = true: every program this host writes runs on a worker, so
+    -- the prompt carries the fleet guidance. The turtle never sees it --
+    -- generation happens here.
+    w.session = session.new(cfg, proxy, remoteRun(id), { fleet = true })
   end
   -- Make the manifest reflect *this* turtle before the prompt is built.
   if w.caps then
@@ -154,14 +167,101 @@ local function relay(except, msg)
   end
 end
 
---- Everything a worker needs to join a fleet already in progress.
+--- Everything a worker needs to join a fleet already in progress. Ages,
+--- not timestamps: clocks differ between computers.
 function M.fleetSnapshot()
-  return { t = "fleet", kind = "snapshot", board = fleetBoard, claims = fleetClaims }
+  local board, now = {}, util.now()
+  for id, e in pairs(fleetBoard) do
+    board[id] = { label = e.label, facts = e.facts,
+                  age = math.floor((now - (e.at or now)) / 1000) }
+  end
+  return { t = "fleet", kind = "snapshot", board = board, claims = fleetClaims,
+           done = fleetDone }
 end
 
-function M.fleetState() return fleetBoard, fleetClaims end
+function M.fleetState() return fleetBoard, fleetClaims, fleetDone end
 
-function M.fleetReset() fleetBoard, fleetClaims = {}, {} end
+--------------------------------------------------------- persistence ----
+
+local fleetDirty = false
+
+function M.saveFleet()
+  fleetDirty = false
+  if not (_G.fs and _G.textutils) then return end
+  local h = fs.open(FLEET_FILE, "w")
+  if not h then return end
+  h.write(textutils.serialize({ board = fleetBoard, claims = fleetClaims,
+                                done = fleetDone }))
+  h.close()
+end
+
+function M.loadFleet()
+  if not (_G.fs and _G.textutils and fs.exists(FLEET_FILE)) then return false end
+  local h = fs.open(FLEET_FILE, "r")
+  if not h then return false end
+  local ok, data = pcall(textutils.unserialize, h.readAll() or "")
+  h.close()
+  if not ok or type(data) ~= "table" then return false end
+  fleetBoard, fleetClaims, fleetDone =
+    data.board or {}, data.claims or {}, data.done or {}
+  -- Timestamps are this computer's clock from before the restart; the
+  -- board's ages start over rather than pretend to know.
+  for _, e in pairs(fleetBoard) do e.at = util.now() end
+  return true
+end
+
+function M.fleetReset()
+  fleetBoard, fleetClaims, fleetDone = {}, {}, {}
+  M.saveFleet()
+end
+
+--- Hand back every claim a worker holds and has not finished. Returns
+--- the names. Called when its job ends, and when it goes silent.
+function M.releaseUnfinished(id)
+  local freed = {}
+  for name, holder in pairs(fleetClaims) do
+    if holder == id and not fleetDone[name] then freed[#freed + 1] = name end
+  end
+  table.sort(freed)
+  for _, name in ipairs(freed) do
+    fleetClaims[name] = nil
+    relay(id, { t = "fleet", kind = "release", name = name, holder = id })
+  end
+  if #freed > 0 then M.saveFleet() end
+  return freed
+end
+
+--- A job ending leaves nothing in progress: whatever it claimed and did
+--- not finish goes back to the pool, so the next probe can take it.
+function M.jobEnded(id)
+  local freed = M.releaseUnfinished(id)
+  if #freed > 0 then
+    console.dim(("[%d] %d unfinished claim(s) returned"):format(id, #freed))
+  end
+end
+
+--- Take back the unfinished claims of workers not heard from within the
+--- lease: stuck, out of range, or unloaded. Their work is presumed not
+--- happening. Returns { [id] = {names} }.
+function M.expireLeases(now, lease)
+  now, lease = now or util.now(), (lease or cfg.claimLease or 300) * 1000
+  local out = {}
+  local holders = {}
+  for name, holder in pairs(fleetClaims) do
+    if not fleetDone[name] then holders[holder] = true end
+  end
+  for id in pairs(holders) do
+    local w = workers[id]
+    -- Silence is counted from when this host could first have heard: a
+    -- host back from a restart has heard nobody yet, and taking every
+    -- claim from probes still at work would be the opposite of the point.
+    local heard = (w and w.heardAt) or M.startedAt or now
+    if now - heard > lease then
+      out[id] = M.releaseUnfinished(id)
+    end
+  end
+  return out
+end
 
 local function handleFleet(id, msg)
   local label = workers[id] and workers[id].label
@@ -169,28 +269,46 @@ local function handleFleet(id, msg)
     local e = fleetBoard[id] or { facts = {} }
     fleetBoard[id] = e
     e.label = label
+    e.at = util.now()
     e.facts[tostring(msg.key)] = msg.value
+    fleetDirty = true
     relay(id, { t = "fleet", kind = "post", from = id, label = label,
                 key = msg.key, value = msg.value })
   elseif msg.t == "claim" then
     local name = tostring(msg.name)
     local holder = fleetClaims[name]
-    local ok = holder == nil or holder == id
+    local ok = (holder == nil or holder == id) and not (fleetDone[name] and holder ~= id)
     if ok then fleetClaims[name] = id; holder = id end
     net.send(id, { t = "claimed", req = msg.req, name = name, ok = ok,
-                   holder = holder }, cfg.protocol)
-    if ok then relay(id, { t = "fleet", kind = "claim", name = name, holder = id }) end
+                   holder = holder, done = fleetDone[name] }, cfg.protocol)
+    if ok then
+      relay(id, { t = "fleet", kind = "claim", name = name, holder = id })
+      M.saveFleet()
+    end
+  elseif msg.t == "finish" then
+    local name = tostring(msg.name)
+    if fleetClaims[name] == nil or fleetClaims[name] == id then
+      fleetClaims[name], fleetDone[name] = id, true
+      relay(id, { t = "fleet", kind = "finish", name = name, holder = id })
+      M.saveFleet()
+    end
   elseif msg.t == "release" then
     local name = tostring(msg.name)
-    if fleetClaims[name] == id then
+    if fleetClaims[name] == id and not fleetDone[name] then
       fleetClaims[name] = nil
       relay(id, { t = "fleet", kind = "release", name = name, holder = id })
+      M.saveFleet()
     end
+  elseif msg.t == "alive" then
+    if workers[id] then workers[id].distance = msg.distance end
   end
 end
 
 function M.handleStray(id, msg)
-  if msg.t == "post" or msg.t == "claim" or msg.t == "release" then
+  -- Anything from a worker is proof of life; the claim lease runs on this.
+  if workers[id] then workers[id].heardAt = util.now() end
+  if msg.t == "post" or msg.t == "claim" or msg.t == "release"
+     or msg.t == "finish" or msg.t == "alive" then
     return handleFleet(id, msg)
   end
   if busyWith[id] and (msg.t == "output" or msg.t == "result") then
@@ -203,6 +321,7 @@ function M.handleStray(id, msg)
     workers[id].situation = msg.situation or workers[id].situation
     workers[id].label     = msg.label or workers[id].label
     workers[id].lastSeen  = os.clock()
+    workers[id].heardAt   = util.now()
     if isNew then
       console.head(("worker %d (%s) joined"):format(id, workers[id].label or "?"))
       target = target or id
@@ -244,6 +363,7 @@ function M.handleStray(id, msg)
     end
     if not refused then
       w.last = msg.ok and "done" or (msg.aborted and "stopped" or "failed")
+      M.jobEnded(id)
     end
   end
 end
@@ -289,7 +409,9 @@ function M.parseIds(spec, default)
   return ids
 end
 
-net.onStray = function(id, msg) M.handleStray(id, msg) end
+net.onStray = function(id, msg)
+  if not listening then M.handleStray(id, msg) end
+end
 
 --- For tests, which drive handleStray and launch without M.run.
 function M.configure(c) cfg = c end
@@ -480,11 +602,22 @@ local function command(input)
         end
         console.dim(("%-4s %s"):format(tostring(id), table.concat(bits, " ")))
       end
-      local per = {}
-      for _, holder in pairs(fleetClaims) do per[holder] = (per[holder] or 0) + 1 end
-      for _, id in ipairs(util.keys(per)) do
-        any = true
-        console.dim(("%-4s holds %d claim(s)"):format(tostring(id), per[id]))
+      local per, fin = {}, {}
+      for name, holder in pairs(fleetClaims) do
+        if fleetDone[name] then fin[holder] = (fin[holder] or 0) + 1
+        else per[holder] = (per[holder] or 0) + 1 end
+      end
+      local now = util.now()
+      for _, id in ipairs(util.keys(workers)) do
+        local w = workers[id]
+        local heard = w.heardAt and math.floor((now - w.heardAt) / 1000)
+        if per[id] or fin[id] or heard then
+          any = true
+          console.dim(("%-4s %d active, %d done; heard %s%s"):format(
+            tostring(id), per[id] or 0, fin[id] or 0,
+            heard and (heard .. "s ago") or "never",
+            w.distance and (", " .. math.floor(w.distance) .. " blocks") or ""))
+        end
       end
       if not any then console.dim("nothing posted or claimed yet") end
     end
@@ -684,10 +817,32 @@ end
 --- Background listener so workers can join, and relay requests, while the
 --- operator is typing.
 local function listen()
+  listening = true
+  M.startedAt = util.now()
+  local lastBeat, lastSave = -math.huge, util.now()
   while running do
-    local id, msg = net.receive(5, cfg.protocol)
+    -- The heartbeat is what makes silence mean something: a worker that
+    -- has heard nothing for three beats knows it is out of contact, and
+    -- one that stops answering lets the host take its claims back.
+    local now = util.now()
+    if now - lastBeat >= (cfg.heartbeat or 10) * 1000 then
+      lastBeat = now
+      net.broadcast({ t = "beat", modem = cfg.hostModem }, cfg.protocol)
+      for id, names in pairs(M.expireLeases(now)) do
+        if #names > 0 then
+          console.warn(("[%d] silent too long; %d claim(s) returned")
+            :format(id, #names))
+        end
+      end
+    end
+    if fleetDirty and now - lastSave >= 10000 then
+      lastSave = now
+      M.saveFleet()
+    end
+    local id, msg = net.receive(math.min(5, cfg.heartbeat or 10), cfg.protocol)
     if id and msg then M.handleStray(id, msg) end
   end
+  listening = false
 end
 
 function M.run()
@@ -708,6 +863,11 @@ function M.run()
   if not ok then console.err("no modem: " .. tostring(err)); return end
   if rednet.host then pcall(rednet.host, cfg.protocol, cfg.hostname) end
 
+  if M.loadFleet() then
+    local n = 0
+    for _ in pairs(fleetClaims) do n = n + 1 end
+    console.dim(("fleet state restored: %d claim(s); /fleet reset to clear"):format(n))
+  end
   net.broadcast({ t = "hostup" }, cfg.protocol)
   console.dim("announced as '" .. cfg.hostname .. "'. waiting for workers... (/help)")
 

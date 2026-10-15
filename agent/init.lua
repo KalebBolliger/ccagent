@@ -145,6 +145,11 @@ function agent.situation()
     bits[#bits + 1] = "inv: " .. inv.summary(6)
     bits[#bits + 1] = "seen: " .. world.summary(nav.pos(), 6)
   end
+  -- Only on a fleet worker. A program written while out of contact has
+  -- to know it, and one about to walk away from the host has to know how
+  -- far it can go: neither is visible from anything else on this list.
+  local link = fleet.summary()
+  if link then bits[#bits + 1] = link end
   return table.concat(bits, "\n")
 end
 
@@ -253,13 +258,17 @@ registry.add("job", job, "talk to the operator; survive reboots", {
 
 registry.add("fleet", fleet, "split work with other turtles on the same host", {
   { fn = "claim",     sig = "(name) -> ok, holderId",
-    doc = "take a named piece of work (e.g. 'cell 2,5'); false + holder if another turtle has it. The host grants each name once, so claim BEFORE starting work rather than checking the board. Always true with no host. nil, err if the host did not answer" },
+    doc = "take a named piece of work (e.g. 'cell 2,5'); false + holder if another turtle has it or finished it. The host grants each name once, so claim BEFORE starting work rather than checking the board. Always true with no host. nil, err = out of contact: unknown, NOT taken. Claiming your own again is fine, and is how to confirm a long-held claim did not lapse" },
+  { fn = "finish",    sig = "(name)",              doc = "mark claimed work done; it stays taken for good. Unfinished claims are returned to the pool when your job ends, or after ~5 min without contact" },
   { fn = "release",   sig = "(name)",              doc = "give back work you could not finish so another turtle can take it" },
-  { fn = "claims",    sig = "() -> {name=id}",     doc = "who holds what" },
-  { fn = "post",      sig = "(key, value)",        doc = "tell the other turtles a small fact (string/number/small table); latest per key wins. e.g. post('pos', nav.pos())" },
-  { fn = "board",     sig = "() -> {[id]={label,age,<key>=value}}", doc = "what every turtle last posted, you included; age in seconds" },
+  { fn = "claims",    sig = "() -> {name=id}",     doc = "who holds or finished what" },
+  { fn = "isDone",    sig = "(name) -> bool" },
+  { fn = "post",      sig = "(key, value)",        doc = "tell the other turtles a small fact (string/number/small table); latest per key wins. Lost silently out of range, so re-post what matters. e.g. post('pos', nav.pos())" },
+  { fn = "board",     sig = "() -> {[id]={label,age,<key>=value}}", doc = "what every turtle last posted, you included; age = seconds since that turtle last posted" },
+  { fn = "link",      sig = "() -> {connected,heardAgo,distance,lastContact,modem,hostModem,unlimited}",
+    doc = "contact with the host. Not unlimited: a wireless modem reaches ~64 blocks below y=96. Watch distance/connected before going further, and nav.moveTo(lastContact) to reconnect" },
   { fn = "id",        sig = "() -> n",             doc = "this turtle's id, as used in board and claims" },
-  { fn = "connected", sig = "() -> bool",          doc = "a host is relaying; false means you are working alone" },
+  { fn = "connected", sig = "() -> bool",          doc = "a host is relaying right now; false = alone or out of contact (link() says which)" },
 })
 
 registry.add("lib", lib, "saved routines, callable by name", {
@@ -270,7 +279,7 @@ registry.add("lib", lib, "saved routines, callable by name", {
 })
 
 registry.add("caps", caps, "what this machine can actually do", {
-  { fn = "has",     sig = "(name) -> bool",                 doc = "turtle, digging, crafting, equip, gps, modem, wirelessModem, unlimitedFuel" },
+  { fn = "has",     sig = "(name) -> bool",                 doc = "turtle, digging, crafting, equip, gps, modem, wirelessModem, enderModem, unlimitedFuel" },
   { fn = "get",     sig = "(name) -> value" },
   { fn = "require", sig = "(name, why?)",                   doc = "hard guard; errors with a readable message" },
   { fn = "refresh", sig = "() -> flags",                    doc = "re-probe after equipping: equipping a crafting table adds crafting" },

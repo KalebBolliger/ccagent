@@ -103,6 +103,29 @@ local function forget(origin)
   agent.boot()
 end
 
+--- Answer the host's heartbeat. The reply is what lets the host tell a
+--- probe that is busy and quiet from one that is gone, which is what
+--- decides when its unfinished claims go back to the pool.
+local function beat(id, msg)
+  hostId = hostId or id
+  if id ~= hostId then return end
+  agent.fleet.heard(nil, agent.nav.pos(), msg.modem)
+  net.send(id, { t = "alive", distance = agent.fleet.link().distance }, cfg.protocol)
+end
+
+--- Every wireless message carries the distance it travelled, but rednet
+--- hands programs only the sender and the payload. Read the raw event
+--- alongside it to learn how far away the host is -- the number that says
+--- how much further a probe can go before it falls out of range.
+local function watchLink()
+  while running do
+    local _, _, _, _, payload, distance = os.pullEvent("modem_message")
+    if hostId and type(payload) == "table" and payload.nSender == hostId then
+      agent.fleet.heard(distance, agent.nav.pos())
+    end
+  end
+end
+
 local function announce()
   local d = describe()
   d.t = "hello"
@@ -156,6 +179,8 @@ local function runProgram(msg)
                          error = "busy with job " .. tostring(msg.job) }, cfg.protocol)
         elseif m.t == "fleet" or m.t == "claimed" then
           agent.fleet.deliver(m)
+        elseif m.t == "beat" then
+          beat(id, m)
         elseif m.t == "forget" then
           net.send(id, { t = "output", kind = "warn", job = msg.job,
                          text = "busy; /stop first, then /forget" }, cfg.protocol)
@@ -212,6 +237,8 @@ local function listen()
         net.send(id, { t = "report", text = report(nil) }, cfg.protocol)
       elseif msg.t == "fleet" or msg.t == "claimed" then
         agent.fleet.deliver(msg)
+      elseif msg.t == "beat" then
+        beat(id, msg)
       elseif msg.t == "forget" then
         hostId = id
         forget(msg.origin)
@@ -283,9 +310,15 @@ function M.run()
 
   hostId = findHost()
   -- Programs reach the host only through agent.fleet; this is its wire.
-  agent.fleet.link = {
+  agent.fleet.wire = {
     id = os.getComputerID(), label = describeLabel(),
     connected = function() return hostId ~= nil end,
+    modem = function()
+      local ender = agent.caps.get("enderModem")
+      if ender then return "ender" end
+      if ender == false and agent.caps.has("wirelessModem") then return "wireless" end
+      return nil
+    end,
     send = function(m)
       if not hostId then return false end
       return net.send(hostId, m, cfg.protocol)
@@ -300,7 +333,7 @@ function M.run()
   announce()
 
   if _G.parallel then
-    parallel.waitForAny(listen, prompt)
+    parallel.waitForAny(listen, prompt, watchLink)
   else
     listen()
   end

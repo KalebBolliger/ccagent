@@ -104,6 +104,25 @@ caps.register("wirelessModem", function()
   return m ~= nil
 end)
 
+--- An ender modem: no range limit, and it reaches other dimensions. The
+--- peripheral cannot say which kind it is -- both answer isWireless() --
+--- but the upgrade's item can (computercraft:wireless_modem_advanced,
+--- per CC:Tweaked's ModRegistry). nil when this build cannot say what is
+--- equipped, so "unknown" never reads as "no".
+caps.register("enderModem", function()
+  if not _G.turtle then return false end
+  local unknown = false
+  for _, side in ipairs({ "left", "right" }) do
+    local item = caps.equipped(side)
+    if item == nil then unknown = true
+    elseif item and tostring(item.name or ""):find("wireless_modem_advanced", 1, true) then
+      return true
+    end
+  end
+  if unknown then return nil end
+  return false
+end)
+
 local DIG_TOOLS = { "pickaxe", "axe", "shovel", "spade", "sword", "hoe" }
 
 --- Can this turtle break blocks?
@@ -272,7 +291,8 @@ function caps.summary()
       "craft(aboard)")
   add(f.equip, "equip")
   add(f.gps, "gps")
-  add(f.wirelessModem, "wireless")
+  add(f.wirelessModem and f.enderModem, "ender")
+  add(f.wirelessModem and not f.enderModem, "wireless")
   add(f.modem and not f.wirelessModem, "wired-modem")
   add(f.unlimitedFuel, "unlimited-fuel")
   local up = {}

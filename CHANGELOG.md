@@ -8,6 +8,42 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- Contact between host and workers is measured. The host sends a
+  heartbeat every `heartbeat` seconds (10); each worker records when it
+  last heard the host, how far away it was -- CC reports a distance with
+  every wireless message, which `rednet.receive` discards, so the worker
+  reads the raw `modem_message` too -- and where it stood at the time.
+  `fleet.link()` gives a program all of that, the state line Claude
+  reads gains a `link:` line ("host heard 3s ago, 41 blocks away;
+  wireless: ~64 blocks below y=96" / "LOST 45s (last heard at ...)"),
+  and a claim made out of contact fails at once instead of waiting out
+  its five-second timeout. Range rules are from CC:Tweaked's
+  `WirelessModemPeripheral`/`WirelessNetwork`: 64 blocks below y=96
+  rising to 384 at build height, unlimited for an ender modem, and a
+  message arrives within the *larger* of the two ends' ranges -- so one
+  ender modem at the host is enough. A turtle's ender modem is
+  recognised by its item (`caps.has("enderModem")`); a computer's cannot
+  be, so set `hostModem = "ender"` in the host's config.
+
+- Claims end. `fleet.finish(name)` marks work done for good; anything
+  claimed and not finished goes back to the pool when the job ends, or
+  when the holder has not been heard for `claimLease` seconds (300). A
+  stuck or unloaded probe used to hold its cells forever. The host keeps
+  board and claims in `/.ccagent/fleet.dat`, so its own chunk unloading
+  no longer sends the next probe into a wing already searched; `/fleet
+  reset` clears it. `/fleet` shows each worker's active and finished
+  claims, when it was last heard, and how far away.
+
+- Programs the host writes carry a short WORKING IN A FLEET section in
+  the system prompt: claim before working, `nil` from a claim means out
+  of contact rather than taken, re-post because posts are lost out of
+  range, check the link before walking away. Only the host's prompt has
+  it -- the controller writes for a turtle working alone.
+
+  `heartbeat`, `claimLease` and `hostModem` are new config keys with
+  defaults, so existing installs get them without editing; `hostModem`
+  has to be set by hand on a host that has an ender modem.
+
 - `fleet`, a capability for turtles splitting one job: `fleet.claim(name)`
   takes a named piece of work through the host, which grants each name to
   exactly one worker because it handles one message at a time;
@@ -26,10 +62,6 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   shared frame, facing "north". Probes without GPS placed in a row and
   given their offsets then agree on coordinates, which is what makes the
   positions they post comparable.
-
-- The host's blocking run loop (`@id`, `/run`) now passes a worker's
-  other traffic to the stray handler instead of dropping it, so a
-  program's claims are answered while the host waits on it.
 
 - `/launch <name> all|id,id` on the host starts a saved program on several
   workers at once and returns the prompt straight away. Before this a
@@ -57,6 +89,20 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   controller. A worker without GPS now says so at boot.
 
 **Fixed**
+
+- The host handled a busy worker's fleet traffic twice. rednet delivers
+  every message to every coroutine waiting for one, so with the
+  background listener running, the run loop forwarding the same message
+  to the stray handler answered claims twice and relayed posts twice --
+  and a forwarding path older than the fleet code printed other workers'
+  output twice while an `@id` job ran. An earlier entry here described
+  that forwarding as a fix for unanswered claims; it was not, since the
+  listener already saw those messages. Forwarding now happens only when
+  no listener is running.
+
+- Board ages restarted at zero whenever a worker received a snapshot,
+  so a probe silent for an hour looked as fresh as one that had just
+  posted. Snapshots now carry ages.
 
 - Without GPS, a turtle carried to a new spot boots into its *stored*
   pose: it believes it is still where it last stood, facing the way it

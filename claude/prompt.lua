@@ -266,6 +266,34 @@ job.report({ placed = placed })
 
 --- Assemble the system blocks. Returns the array form the API expects,
 --- with cache_control on the final (and only) static block.
+--- Only in prompts built by the fleet host, whose every program runs on a
+--- worker. Static per session, so it sits in the cached prefix; the live
+--- part (is the host in range right now) is the "link:" line of CURRENT
+--- STATE, which is per request.
+prompt.FLEET = [[
+WORKING IN A FLEET
+This program runs on one of several turtles driven by the same host.
+`fleet` is how they divide work and keep in touch.
+- Split the work into named pieces (by area, if the request does not
+  say: e.g. "cell 2,5") and fleet.claim each piece BEFORE starting it.
+  false = another turtle has it or finished it: pick another.
+  nil = out of contact: unknown, NOT taken -- get back in range and
+  retry, or carry on with a piece you already hold.
+- fleet.finish(name) when a piece is done. Unfinished claims go back to
+  the pool when this program ends, or after ~5 min without contact;
+  claiming your own piece again confirms you still hold it.
+- fleet.post small facts (position, progress) every so often. Posts and
+  job.say output are LOST while out of range, so re-post; do not post
+  once and rely on it. fleet.board() shows the others; a large age means
+  that turtle has gone quiet.
+- Range: CURRENT STATE has a "link:" line. Unless it says there is no
+  range limit, the host is reachable only within ~64 blocks below y=96.
+  Before heading further from the host check fleet.link(); when
+  connected is false, nav.moveTo(fleet.link().lastContact, ...) to get
+  back in touch before relying on claims.
+- Positions on the board mean the same thing only when the turtles
+  share a frame (GPS, or aligned by the operator).]]
+
 function prompt.system(opts)
   opts = opts or {}
   local parts = {
@@ -287,6 +315,7 @@ function prompt.system(opts)
 
   parts[#parts + 1] = prompt.CONTRACT
   parts[#parts + 1] = prompt.EXAMPLES
+  if opts.fleet then parts[#parts + 1] = prompt.FLEET end
 
   if opts.extra and opts.extra ~= "" then
     parts[#parts + 1] = "OPERATOR NOTES\n" .. opts.extra

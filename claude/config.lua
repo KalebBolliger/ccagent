@@ -36,6 +36,11 @@ config.defaults = {
   -- fleet (host/worker mode)
   protocol    = "ccagent",
   hostname    = "ccagent-host",
+  heartbeat   = 10,           -- seconds between host heartbeats
+  claimLease  = 300,          -- seconds of worker silence before its
+                              -- unfinished claims return to the pool
+  hostModem   = nil,          -- "ender" if the host has an ender modem:
+                              -- workers are told there is no range limit
 
   -- Where /share posts a run report. A default is shipped so the command
   -- works out of the box, and it is overridable field by field because
