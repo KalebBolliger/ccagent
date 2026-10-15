@@ -121,20 +121,42 @@ and a trail of where it believed it was while it ran — and saves it to
 
 ### Turtles that split a job between them
 
-A program on a worker can coordinate with the others through `fleet`, with
-the host as switchboard:
+A program on a worker coordinates with the others through `fleet`, with
+the host as the only judge. It works the same for one probe or twenty,
+and nothing in it needs to know how many there are:
 
 ```lua
-if fleet.claim("cell 2,5") then ... end   -- the host grants each name once
-fleet.post("pos", nav.pos())              -- relayed to every other worker
-fleet.board()[7].pos                      -- what worker 7 last posted
+for cx = 0, 7 do for cz = 0, 7 do                  -- every probe may offer
+  fleet.offer(("cell %d,%d"):format(cx, cz),        -- the same list; repeats
+              { pos = { x = cx * 16, y = 0, z = cz * 16 } })  -- are ignored
+end end
+while true do
+  if fleet.receive(0, "recall") then break end      -- /fleet tell all recall
+  local name, data, info = fleet.take()             -- nearest open piece
+  if not name then break end                        -- info.reason says why
+  -- ... search it; fleet.offer anything new found on the way ...
+  fleet.finish(name)
+end
 ```
 
-A claim is the safe way to divide work: two probes reading the board and
-both deciding nobody has the north wing is a race, two probes *claiming* it
-is not. `/fleet` on the host shows what was posted and who holds what;
-`/fleet reset` clears both before a new expedition. On the standalone
-controller every claim succeeds, so the same program runs as a fleet of one.
+- **Work** is open, taken or done. `fleet.take` hands out the best open
+  piece (highest `data.priority`, then nearest, then oldest);
+  `fleet.claim(name)` takes one specific piece. Taken work that is not
+  finished goes back to the pool when the job ends, or when the probe has
+  been silent for five minutes.
+- **Messages**: `fleet.post` for facts everyone sees on the board,
+  `fleet.send(id or "all", topic, body)` / `fleet.receive` for messages,
+  and `/fleet tell <ids|all> <topic>` from the operator.
+- **Delivery**: everything but the questions (take, claim) is numbered,
+  applied by the host in order, and re-sent until acknowledged -- in both
+  directions -- so a probe that walks out of range delays its news rather
+  than losing it. Only after a very long silence are its oldest output
+  lines given up, and the host says how many.
+
+`/fleet` shows the board, each worker's claims, link and queued messages;
+`/fleet work` lists every piece; `/fleet reset` clears work and board
+before a new expedition. On the standalone controller the pool is kept
+locally, so the same program runs as a fleet of one.
 
 A claim lasts while the job that took it runs. `fleet.finish(name)` keeps
 it for good; anything unfinished goes back to the pool when the job ends,
@@ -151,8 +173,11 @@ host's `/ccagent/config.lua` if it has one -- the game cannot tell a
 program which kind a computer has. The host sends a heartbeat every ten
 seconds; each worker tracks when it last heard it, how far away it was,
 and where it stood, and `fleet.link()` and the `link:` line of its state
-say so. A computer running CC's built-in `repeat` program between the
-host and the workers relays rednet and extends the reach.
+say so. To extend the reach, put a computer running CC's built-in `repeat`
+program between the host and the workers, or turn a worker into one:
+`/fleet relay 4 on`, or `fleet.relay(true)` from a program that parks a
+probe at the edge of range. A relay stays one across reboots until turned
+off.
 
 Positions are only comparable if the turtles share a frame. With GPS they
 do. Without it, place them facing the same way and give each its offset
@@ -749,7 +774,7 @@ docs/EXTENDING.md      how to add a capability or a saved routine
 CHANGELOG.md           what changed, release by release
 ```
 
-`lua5.3 test/all.lua` runs the three suites against a mock world — 779
+`lua5.3 test/all.lua` runs the three suites against a mock world — 817
 assertions covering facing math, pathfinding, replanning, inventory matching,
 the sandbox, fence extraction, manifest generation, contract parsing and
 gating, lint accuracy, distributed cycle detection, nested state isolation,

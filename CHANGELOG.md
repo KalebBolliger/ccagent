@@ -8,6 +8,47 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Added**
 
+- A work pool for any number of probes (`agent/pool.lua`).
+  `fleet.offer(name, data)` adds work -- repeats ignored, so every probe
+  may offer the same list -- and `fleet.take()` hands out the best open
+  piece: highest `data.priority`, then nearest to the taker, then oldest.
+  Released work returns to open with its data, so pieces found mid-run
+  can be offered and picked up by whoever is closest. Programs no longer
+  need to know how many probes there are or race each other through
+  `fleet.claim`. The same rules run on the host, in each worker's cache,
+  and alone on a controller, so a fleet program runs unchanged on one.
+
+- Messages: `fleet.send(id or "all", topic, body)`, `fleet.receive`,
+  `fleet.inbox`, and `/fleet tell <ids|all> <topic> [text]` from the
+  operator -- e.g. a `recall` that the fleet guidance tells programs to
+  check in their main loop.
+
+- Delivery that survives range. Everything a worker sends that changes
+  shared state or must be seen -- posts, offers, finishes, releases,
+  messages, output lines, the job result -- is numbered per boot and
+  applied by the host strictly in order; the heartbeat carries the host's
+  acknowledgements and the worker re-sends the rest. Messages to a worker
+  are queued on the host and re-sent until it acknowledges. Walking out of
+  range now delays news instead of losing it; only output is ever given
+  up (oldest first, after 300 entries), and the host reports how many
+  lines. Repeated posts of one key keep only the newest while waiting.
+
+- Relays. `/fleet relay <id> on|off` or `fleet.relay(true)` makes a
+  worker repeat rednet the way CC's `repeat` program does (each message
+  id once, both to its recipient and to further relays), and keeps it a
+  relay across reboots.
+
+- Fleet updates (posts, offers, claims) are broadcast once instead of
+  sent to each worker, so their cost does not grow with the fleet.
+  `/fleet work` lists every piece and who has it.
+
+- The host's fleet logic moved to `ui/switchboard.lua`, which takes its
+  I/O as functions. The test suite drives it with one real host and five
+  real workers over a simulated radio that loses what is out of range,
+  and checks that every cell is taken exactly once, that half the
+  transmissions can be lost with every message still arriving in order,
+  and that a restarted host still delivers what it had queued.
+
 - Contact between host and workers is measured. The host sends a
   heartbeat every `heartbeat` seconds (10); each worker records when it
   last heard the host, how far away it was -- CC reports a distance with
@@ -89,6 +130,12 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
   controller. A worker without GPS now says so at boot.
 
 **Fixed**
+
+- The host's run loop (`@id`, `/run`) no longer reads rednet while the
+  background listener is running; it waits on a sink that the listener's
+  dispatcher fills. With numbered messages two readers would not just
+  print twice -- whichever saw a message second would discard it as a
+  duplicate.
 
 - The host handled a busy worker's fleet traffic twice. rednet delivers
   every message to every coroutine waiting for one, so with the

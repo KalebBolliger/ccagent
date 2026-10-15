@@ -106,11 +106,54 @@ end
 --- Answer the host's heartbeat. The reply is what lets the host tell a
 --- probe that is busy and quiet from one that is gone, which is what
 --- decides when its unfinished claims go back to the pool.
+local relayOn = false
+
+--- The heartbeat: proof of contact, the host's acknowledgements, and the
+--- cue to re-send what it has not seen (agent/fleet.lua, fleet.handle).
 local function beat(id, msg)
   hostId = hostId or id
   if id ~= hostId then return end
-  agent.fleet.heard(nil, agent.nav.pos(), msg.modem)
-  net.send(id, { t = "alive", distance = agent.fleet.link().distance }, cfg.protocol)
+  agent.fleet.handle(msg, agent.nav.pos())
+end
+
+--- Everything else from the host that agent.fleet handles.
+local function fleetMessage(id, msg)
+  if hostId and id ~= hostId then return end
+  agent.fleet.handle(msg, agent.nav.pos())
+end
+
+------------------------------------------------------------------ relay ---
+
+-- Relay mode does what CC's rom/programs/rednet/repeat.lua does: every
+-- rednet send is also transmitted on CHANNEL_REPEAT, and a repeater sends
+-- each message it has not seen before on to the recipient's channel and
+-- to other repeaters. rednet itself discards copies it has already
+-- received, so extra relays cost traffic, never duplicates.
+local modemName
+local relaySeen = {}
+
+local function setRelay(on)
+  if not (_G.rednet and _G.peripheral and modemName) then return false end
+  relayOn = on and true or false
+  local ch = net.CHANNEL_REPEAT
+  if relayOn then peripheral.call(modemName, "open", ch)
+  else peripheral.call(modemName, "close", ch) end
+  agent.state.set("relay", relayOn)
+  agent.state.flush()
+  return true
+end
+
+local function relayLoop()
+  while running do
+    local _, side, channel, reply, m = os.pullEvent("modem_message")
+    if relayOn then
+      local to = net.repeatTarget(channel, m, relaySeen, util.now())
+      if to then
+        peripheral.call(side, "transmit", net.CHANNEL_REPEAT, reply, m)
+        peripheral.call(side, "transmit", to, reply, m)
+      end
+    end
+  end
 end
 
 --- Every wireless message carries the distance it travelled, but rednet
@@ -151,9 +194,12 @@ local function runProgram(msg)
         lastLine = text
         last.lines[#last.lines + 1] = tostring(text)
         if #last.lines > 400 then table.remove(last.lines, 1) end
+        -- Through the outbox: held and re-sent while out of range, so a
+        -- probe that walks out of contact delays its log rather than
+        -- losing it (only a very long silence gives up the oldest lines).
         if hostId then
-          net.send(hostId, { t = "output", kind = kind, text = text,
-                             job = msg.job, extra = extra }, cfg.protocol)
+          agent.fleet.queue({ t = "output", kind = kind, text = text,
+                              job = msg.job, extra = extra })
         end
       end,
     })
@@ -177,8 +223,10 @@ local function runProgram(msg)
         elseif m.t == "run" then
           net.send(id, { t = "result", job = m.job, ok = false,
                          error = "busy with job " .. tostring(msg.job) }, cfg.protocol)
-        elseif m.t == "fleet" or m.t == "claimed" then
-          agent.fleet.deliver(m)
+        elseif m.t == "fleet" or m.t == "claimed" or m.t == "took" then
+          fleetMessage(id, m)
+        elseif m.t == "relay" then
+          setRelay(m.on)
         elseif m.t == "beat" then
           beat(id, m)
         elseif m.t == "forget" then
@@ -205,12 +253,12 @@ local function runProgram(msg)
   last.situation = nil
   agent.state.flush()
   if hostId then
-    net.send(hostId, {
+    agent.fleet.queue({
       t = "result", job = msg.job,
       ok = result.ok, error = result.error, output = result.output,
       result = result.result, aborted = result.aborted, elapsed = result.elapsed,
       situation = agent.situation(),
-    }, cfg.protocol)
+    })
   end
   if result.ok then console.head(("done in %.1fs"):format(result.elapsed or 0))
   elseif result.aborted then console.warn("stopped")
@@ -235,8 +283,11 @@ local function listen()
       elseif msg.t == "report" then
         hostId = id
         net.send(id, { t = "report", text = report(nil) }, cfg.protocol)
-      elseif msg.t == "fleet" or msg.t == "claimed" then
-        agent.fleet.deliver(msg)
+      elseif msg.t == "fleet" or msg.t == "claimed" or msg.t == "took" then
+        fleetMessage(id, msg)
+      elseif msg.t == "relay" then
+        setRelay(msg.on)
+        console.head("relay " .. (relayOn and "on" or "off"))
       elseif msg.t == "beat" then
         beat(id, msg)
       elseif msg.t == "forget" then
@@ -297,6 +348,7 @@ function M.run()
   agent.boot()
 
   local ok, err = net.open()
+  if ok then modemName = err end
   if not ok then
     console.err("no modem: " .. tostring(err))
     console.dim("attach a wireless modem, or use ccagent/ui/controller instead")
@@ -312,7 +364,12 @@ function M.run()
   -- Programs reach the host only through agent.fleet; this is its wire.
   agent.fleet.wire = {
     id = os.getComputerID(), label = describeLabel(),
+    -- A new number per boot: the host restarts its count for us, instead
+    -- of discarding a rebooted worker's messages as already seen.
+    session = util.now(),
     connected = function() return hostId ~= nil end,
+    setRelay = setRelay,
+    relaying = function() return relayOn end,
     modem = function()
       local ender = agent.caps.get("enderModem")
       if ender then return "ender" end
@@ -324,6 +381,12 @@ function M.run()
       return net.send(hostId, m, cfg.protocol)
     end,
   }
+  -- A relay stays a relay across a chunk reload: it was parked there to
+  -- hold the network together, and nobody is near it to turn it back on.
+  if agent.state.get("relay") then
+    setRelay(true)
+    console.warn("relay mode on (host: /fleet relay <id> off)")
+  end
   console.info(agent.situation())
   if agent.nav.frame() == "local" then
     console.warn("no GPS: position kept from last boot")
@@ -333,7 +396,7 @@ function M.run()
   announce()
 
   if _G.parallel then
-    parallel.waitForAny(listen, prompt, watchLink)
+    parallel.waitForAny(listen, prompt, watchLink, relayLoop)
   else
     listen()
   end

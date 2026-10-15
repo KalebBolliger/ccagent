@@ -28,6 +28,7 @@ agent/registry.lua
 agent/contract.lua
 agent/lint.lua
 agent/lib.lua
+agent/pool.lua
 agent/fleet.lua
 agent/init.lua
 
@@ -43,6 +44,7 @@ ui/origin.lua
 ui/jobs.lua
 ui/share.lua
 ui/net.lua
+ui/switchboard.lua
 ui/controller.lua
 ui/worker.lua
 ui/host.lua

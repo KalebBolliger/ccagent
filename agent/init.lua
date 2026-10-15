@@ -256,18 +256,28 @@ registry.add("job", job, "talk to the operator; survive reboots", {
   { fn = "recall",     sig = "(key, default?) -> value" },
 })
 
-registry.add("fleet", fleet, "split work with other turtles on the same host", {
+registry.add("fleet", fleet, "share work and messages with other turtles on the same host", {
+  { fn = "offer",     sig = "(name, data?)",
+    doc = "add a piece of work to the shared pool; data is a small table, data.pos lets take() hand out the nearest, data.priority (higher first) the most urgent. Re-offering a known name does nothing, so every turtle may offer the same list" },
+  { fn = "take",      sig = "(opts?) -> name, data, info",
+    doc = "take the best open piece (priority, then nearest to opts.near or you, then oldest); info={open,taken,done}. nil name: info.reason 'none' (if info.taken>0 others still work and pieces may come back: wait and retry) or 'contact' (out of range: unknown)" },
   { fn = "claim",     sig = "(name) -> ok, holderId",
-    doc = "take a named piece of work (e.g. 'cell 2,5'); false + holder if another turtle has it or finished it. The host grants each name once, so claim BEFORE starting work rather than checking the board. Always true with no host. nil, err = out of contact: unknown, NOT taken. Claiming your own again is fine, and is how to confirm a long-held claim did not lapse" },
-  { fn = "finish",    sig = "(name)",              doc = "mark claimed work done; it stays taken for good. Unfinished claims are returned to the pool when your job ends, or after ~5 min without contact" },
-  { fn = "release",   sig = "(name)",              doc = "give back work you could not finish so another turtle can take it" },
+    doc = "take a SPECIFIC named piece; false + holder if another turtle has it or finished it. nil, err = out of contact: unknown, NOT taken. Claiming your own again confirms it did not lapse" },
+  { fn = "finish",    sig = "(name)",              doc = "mark taken work done; it stays taken for good. Unfinished work returns to the pool when your job ends, or after ~5 min without contact" },
+  { fn = "release",   sig = "(name)",              doc = "give back work you could not finish; it becomes open again for another turtle" },
+  { fn = "work",      sig = "() -> {open,taken,done}", doc = "pool counts as last heard (take() is the authority)" },
   { fn = "claims",    sig = "() -> {name=id}",     doc = "who holds or finished what" },
   { fn = "isDone",    sig = "(name) -> bool" },
-  { fn = "post",      sig = "(key, value)",        doc = "tell the other turtles a small fact (string/number/small table); latest per key wins. Lost silently out of range, so re-post what matters. e.g. post('pos', nav.pos())" },
+  { fn = "post",      sig = "(key, value)",        doc = "a small fact everyone can see (string/number/small table); latest per key wins. e.g. post('pos', nav.pos())" },
   { fn = "board",     sig = "() -> {[id]={label,age,<key>=value}}", doc = "what every turtle last posted, you included; age = seconds since that turtle last posted" },
-  { fn = "link",      sig = "() -> {connected,heardAgo,distance,lastContact,modem,hostModem,unlimited}",
-    doc = "contact with the host. Not unlimited: a wireless modem reaches ~64 blocks below y=96. Watch distance/connected before going further, and nav.moveTo(lastContact) to reconnect" },
-  { fn = "id",        sig = "() -> n",             doc = "this turtle's id, as used in board and claims" },
+  { fn = "send",      sig = "(to, topic, body?)",  doc = "message one turtle (id) or 'all' others; delivered in order, held while out of range" },
+  { fn = "receive",   sig = "(timeout?, topic?) -> {from,label,topic,body}|nil",
+    doc = "next message, oldest first; timeout seconds (default 0 = just look); topic filters. from='operator' for the operator's /fleet tell, e.g. topic 'recall'" },
+  { fn = "inbox",     sig = "(topic?) -> n",       doc = "messages waiting" },
+  { fn = "link",      sig = "() -> {connected,heardAgo,distance,lastContact,modem,hostModem,unlimited,pending}",
+    doc = "contact with the host. Not unlimited: a wireless modem reaches ~64 blocks below y=96. Watch distance/connected before going further; nav.moveTo(lastContact) to reconnect. pending = messages not yet delivered" },
+  { fn = "relay",     sig = "(on) -> ok",          doc = "make THIS turtle repeat rednet for the others (stays on after the job); park it between the host and turtles beyond range" },
+  { fn = "id",        sig = "() -> n",             doc = "this turtle's id, as used in board, claims and messages" },
   { fn = "connected", sig = "() -> bool",          doc = "a host is relaying right now; false = alone or out of contact (link() says which)" },
 })
 

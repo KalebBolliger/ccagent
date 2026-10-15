@@ -272,25 +272,32 @@ job.report({ placed = placed })
 --- STATE, which is per request.
 prompt.FLEET = [[
 WORKING IN A FLEET
-This program runs on one of several turtles driven by the same host.
-`fleet` is how they divide work and keep in touch.
-- Split the work into named pieces (by area, if the request does not
-  say: e.g. "cell 2,5") and fleet.claim each piece BEFORE starting it.
-  false = another turtle has it or finished it: pick another.
-  nil = out of contact: unknown, NOT taken -- get back in range and
-  retry, or carry on with a piece you already hold.
-- fleet.finish(name) when a piece is done. Unfinished claims go back to
-  the pool when this program ends, or after ~5 min without contact;
-  claiming your own piece again confirms you still hold it.
-- fleet.post small facts (position, progress) every so often. Posts and
-  job.say output are LOST while out of range, so re-post; do not post
-  once and rely on it. fleet.board() shows the others; a large age means
-  that turtle has gone quiet.
+This program runs on one of any number of turtles driven by the same
+host -- write it so it works the same with one turtle or twenty, without
+knowing how many there are. `fleet` is how they share work and talk.
+- Share work through the pool. Every turtle may fleet.offer the same
+  pieces (repeats are ignored) -- e.g. a grid of cells with data.pos --
+  then loop: local name, data, info = fleet.take(); work it;
+  fleet.finish(name). Offer new pieces you discover along the way.
+  When take returns nil: info.reason "none" with info.taken > 0 means
+  others are still working and pieces may come back -- job.sleep and
+  retry a few times before finishing; "contact" means out of range.
+  fleet.claim(name) is for one specific piece you chose yourself.
+- Work you take and do not finish goes back to the pool when this
+  program ends; fleet.release it yourself if you give up on it early.
+- fleet.post small facts (position, progress) every so often; read the
+  others with fleet.board(). fleet.send(id or "all", topic, body) and
+  fleet.receive(0, topic) for messages; they are delivered in order and
+  held while out of range.
+- Check fleet.receive(0, "recall") inside your main loop: the operator
+  sends it (/fleet tell all recall) to bring everyone home. On a recall,
+  stop working, release what you hold, and go home.
 - Range: CURRENT STATE has a "link:" line. Unless it says there is no
   range limit, the host is reachable only within ~64 blocks below y=96.
-  Before heading further from the host check fleet.link(); when
-  connected is false, nav.moveTo(fleet.link().lastContact, ...) to get
-  back in touch before relying on claims.
+  Out of range nothing is lost, only delayed, but take/claim fail; check
+  fleet.link() before heading further away and nav.moveTo(
+  fleet.link().lastContact, ...) to reconnect. A turtle parked mid-way
+  with fleet.relay(true) extends the reach for the others.
 - Positions on the board mean the same thing only when the turtles
   share a frame (GPS, or aligned by the operator).]]
 

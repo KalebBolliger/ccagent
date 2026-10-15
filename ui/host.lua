@@ -39,13 +39,9 @@ local workers = {}     -- id -> { label, caps, situation, session, lastSeen }
 local target  = nil    -- currently addressed worker id
 local jobSeq  = 0
 
--- The fleet board (agent/fleet.lua): the latest facts each worker posted,
--- and who holds each claimed piece of work. The host is the only place
--- these are decided, which is what makes a claim safe: it handles one
--- message at a time, so two workers can never both be granted a name.
-local fleetBoard  = {}   -- [id] = { label=, at=ms, facts = {key=value} }
-local fleetClaims = {}   -- [name] = id
-local fleetDone   = {}   -- [name] = true: finished, never handed out again
+-- Fleet decisions and delivery (ui/switchboard.lua). Built in M.run and
+-- M.configure, once cfg exists.
+local sb
 
 -- Kept on disk because the host is a computer in a chunk like any other:
 -- an unload wipes memory, and a fleet that forgets its claims sends the
@@ -55,7 +51,8 @@ local FLEET_FILE = "/.ccagent/fleet.dat"
 -- True while listen() runs. rednet delivers every message to every
 -- coroutine waiting for one, so with the listener up, a second handler
 -- in remoteRun or net.await handles the same message twice -- a claim
--- answered twice, a post relayed twice, a line printed twice.
+-- answered twice, a post relayed twice, a line printed twice. With the
+-- listener up it is the ONLY dispatcher, and others wait on it.
 local listening = false
 
 --------------------------------------------------------------- plumbing ---
@@ -93,44 +90,43 @@ local function poll(id, timeout)
   return workers[id]
 end
 
---- Send a program to a worker and pump its output until it reports back.
--- While a job is in flight the background listener must not also consume
--- and re-print that worker's traffic: rednet events are delivered to every
--- coroutine, so without this you see every line twice.
-local busyWith = {}
+--- Send a program to a worker and wait for its result.
+-- The busy worker's output and result are routed by handleStray into a
+-- SINK this function registers, rather than read off rednet here: the
+-- listener receives every message anyway, and two readers is how a line
+-- gets printed twice or a resent one gets lost to whichever reader saw it
+-- second. Without a listener (tests, a machine with no parallel API) this
+-- loop does the receiving itself and feeds handleStray.
+local sinks = {}   -- [id] = { job=, onOutput=, result= }
 
 local function remoteRun(id)
   return function(code, opts)
     jobSeq = jobSeq + 1
     local jobId = ("j%d"):format(jobSeq)
-    busyWith[id] = true
+    local sink = { job = jobId, onOutput = opts and opts.onOutput }
+    sinks[id] = sink
     net.send(id, { t = "run", job = jobId, src = code }, cfg.protocol)
 
     local deadline = os.clock() + (cfg.jobTimeout or 900)
-    while os.clock() < deadline do
-      local from, msg = net.receive(5, cfg.protocol)
-      if from == id and msg then
-        if msg.t == "output" then
-          if opts and opts.onOutput then
-            opts.onOutput(msg.kind or "say", msg.text, msg.extra)
-          end
-        elseif msg.t == "result" and msg.job == jobId then
-          if msg.situation and workers[id] then workers[id].situation = msg.situation end
-          busyWith[id] = nil
-          M.jobEnded(id)
-          return {
-            ok = msg.ok, error = msg.error, output = msg.output,
-            result = msg.result, aborted = msg.aborted, elapsed = msg.elapsed,
-          }
-        elseif msg.t ~= "result" and not listening then
-          M.handleStray(from, msg)
-        end
-      elseif from and msg and not listening then
-        M.handleStray(from, msg)
+    while os.clock() < deadline and not sink.result do
+      if listening then
+        local timer = os.startTimer(1)
+        repeat
+          local ev, p1 = os.pullEvent()
+        until ev == "ccagent_sink" or (ev == "timer" and p1 == timer)
+      else
+        local from, msg = net.receive(1, cfg.protocol)
+        if from and msg then M.handleStray(from, msg) end
       end
     end
-    busyWith[id] = nil
-    return { ok = false, error = "worker did not report back in time" }
+    sinks[id] = nil
+    if not sink.result then
+      return { ok = false, error = "worker did not report back in time" }
+    end
+    M.jobEnded(id)
+    local m = sink.result
+    return { ok = m.ok, error = m.error, output = m.output,
+             result = m.result, aborted = m.aborted, elapsed = m.elapsed }
   end
 end
 
@@ -160,38 +156,28 @@ local function sessionFor(id)
   return w.session
 end
 
---- Send a fleet message to every worker but one.
-local function relay(except, msg)
-  for wid in pairs(workers) do
-    if wid ~= except then net.send(wid, msg, cfg.protocol) end
-  end
+--- Everything a worker needs to join a fleet already in progress.
+function M.fleetSnapshot() return sb:snapshot() end
+
+--- The switchboard, for tests and the /fleet command.
+function M.switchboard() return sb end
+
+local function newSwitchboard()
+  return require("ui.switchboard").new({
+    send = function(id, msg) net.send(id, msg, cfg.protocol) end,
+    broadcast = function(msg) net.broadcast(msg, cfg.protocol) end,
+    now = util.now,
+    workers = function() return util.keys(workers) end,
+    label = function(id) return workers[id] and workers[id].label end,
+  })
 end
-
---- Everything a worker needs to join a fleet already in progress. Ages,
---- not timestamps: clocks differ between computers.
-function M.fleetSnapshot()
-  local board, now = {}, util.now()
-  for id, e in pairs(fleetBoard) do
-    board[id] = { label = e.label, facts = e.facts,
-                  age = math.floor((now - (e.at or now)) / 1000) }
-  end
-  return { t = "fleet", kind = "snapshot", board = board, claims = fleetClaims,
-           done = fleetDone }
-end
-
-function M.fleetState() return fleetBoard, fleetClaims, fleetDone end
-
---------------------------------------------------------- persistence ----
-
-local fleetDirty = false
 
 function M.saveFleet()
-  fleetDirty = false
+  sb.dirty = false
   if not (_G.fs and _G.textutils) then return end
   local h = fs.open(FLEET_FILE, "w")
   if not h then return end
-  h.write(textutils.serialize({ board = fleetBoard, claims = fleetClaims,
-                                done = fleetDone }))
+  h.write(textutils.serialize(sb:export()))
   h.close()
 end
 
@@ -202,118 +188,87 @@ function M.loadFleet()
   local ok, data = pcall(textutils.unserialize, h.readAll() or "")
   h.close()
   if not ok or type(data) ~= "table" then return false end
-  fleetBoard, fleetClaims, fleetDone =
-    data.board or {}, data.claims or {}, data.done or {}
-  -- Timestamps are this computer's clock from before the restart; the
-  -- board's ages start over rather than pretend to know.
-  for _, e in pairs(fleetBoard) do e.at = util.now() end
-  return true
+  return sb:import(data)
 end
 
 function M.fleetReset()
-  fleetBoard, fleetClaims, fleetDone = {}, {}, {}
+  sb:reset()
   M.saveFleet()
 end
 
---- Hand back every claim a worker holds and has not finished. Returns
---- the names. Called when its job ends, and when it goes silent.
-function M.releaseUnfinished(id)
-  local freed = {}
-  for name, holder in pairs(fleetClaims) do
-    if holder == id and not fleetDone[name] then freed[#freed + 1] = name end
-  end
-  table.sort(freed)
-  for _, name in ipairs(freed) do
-    fleetClaims[name] = nil
-    relay(id, { t = "fleet", kind = "release", name = name, holder = id })
-  end
-  if #freed > 0 then M.saveFleet() end
-  return freed
-end
-
---- A job ending leaves nothing in progress: whatever it claimed and did
---- not finish goes back to the pool, so the next probe can take it.
+--- A job ending leaves nothing in progress: whatever it took and did not
+--- finish goes back to the pool, so the next probe can take it.
 function M.jobEnded(id)
-  local freed = M.releaseUnfinished(id)
+  local freed = sb:releaseAll(id)
   if #freed > 0 then
     console.dim(("[%d] %d unfinished claim(s) returned"):format(id, #freed))
+    M.saveFleet()
   end
 end
 
---- Take back the unfinished claims of workers not heard from within the
---- lease: stuck, out of range, or unloaded. Their work is presumed not
---- happening. Returns { [id] = {names} }.
-function M.expireLeases(now, lease)
-  now, lease = now or util.now(), (lease or cfg.claimLease or 300) * 1000
-  local out = {}
-  local holders = {}
-  for name, holder in pairs(fleetClaims) do
-    if not fleetDone[name] then holders[holder] = true end
-  end
-  for id in pairs(holders) do
-    local w = workers[id]
-    -- Silence is counted from when this host could first have heard: a
-    -- host back from a restart has heard nobody yet, and taking every
-    -- claim from probes still at work would be the opposite of the point.
-    local heard = (w and w.heardAt) or M.startedAt or now
-    if now - heard > lease then
-      out[id] = M.releaseUnfinished(id)
+--- One heartbeat: tell every worker we are here and what of theirs we
+--- have applied (acks), then take back the work of the silent ones.
+function M.beat(now)
+  net.broadcast({ t = "beat", modem = cfg.hostModem, acks = sb:acks() },
+                cfg.protocol)
+  return M.expireLeases(now)
+end
+
+--- Take back the unfinished work of workers silent past the lease.
+function M.expireLeases(now)
+  now = now or util.now()
+  local out = sb:expire(now, (cfg.claimLease or 300) * 1000,
+    function(id) return workers[id] and workers[id].heardAt end, M.startedAt)
+  for id, names in pairs(out) do
+    if #names > 0 then
+      console.warn(("[%d] silent too long; %d claim(s) returned"):format(id, #names))
     end
   end
+  if next(out) then M.saveFleet() end
   return out
 end
 
-local function handleFleet(id, msg)
-  local label = workers[id] and workers[id].label
-  if msg.t == "post" then
-    local e = fleetBoard[id] or { facts = {} }
-    fleetBoard[id] = e
-    e.label = label
-    e.at = util.now()
-    e.facts[tostring(msg.key)] = msg.value
-    fleetDirty = true
-    relay(id, { t = "fleet", kind = "post", from = id, label = label,
-                key = msg.key, value = msg.value })
-  elseif msg.t == "claim" then
-    local name = tostring(msg.name)
-    local holder = fleetClaims[name]
-    local ok = (holder == nil or holder == id) and not (fleetDone[name] and holder ~= id)
-    if ok then fleetClaims[name] = id; holder = id end
-    net.send(id, { t = "claimed", req = msg.req, name = name, ok = ok,
-                   holder = holder, done = fleetDone[name] }, cfg.protocol)
-    if ok then
-      relay(id, { t = "fleet", kind = "claim", name = name, holder = id })
-      M.saveFleet()
-    end
-  elseif msg.t == "finish" then
-    local name = tostring(msg.name)
-    if fleetClaims[name] == nil or fleetClaims[name] == id then
-      fleetClaims[name], fleetDone[name] = id, true
-      relay(id, { t = "fleet", kind = "finish", name = name, holder = id })
-      M.saveFleet()
-    end
-  elseif msg.t == "release" then
-    local name = tostring(msg.name)
-    if fleetClaims[name] == id and not fleetDone[name] then
-      fleetClaims[name] = nil
-      relay(id, { t = "fleet", kind = "release", name = name, holder = id })
-      M.saveFleet()
-    end
-  elseif msg.t == "alive" then
-    if workers[id] then workers[id].distance = msg.distance end
-  end
-end
+-- Fleet traffic: news through the outbox (in order, once), questions
+-- answered directly.
+local FLEET_MSG = { post = true, offer = true, claim = true, take = true,
+                    finish = true, release = true, msg = true, gap = true }
 
 function M.handleStray(id, msg)
   -- Anything from a worker is proof of life; the claim lease runs on this.
   if workers[id] then workers[id].heardAt = util.now() end
-  if msg.t == "post" or msg.t == "claim" or msg.t == "release"
-     or msg.t == "finish" or msg.t == "alive" then
-    return handleFleet(id, msg)
+
+  -- Duplicates and early arrivals of numbered messages stop here.
+  msg = sb:accept(id, msg)
+  if not msg then return end
+
+  if FLEET_MSG[msg.t] then
+    local note = sb:apply(id, msg)
+    if note then console.warn(("[%d] %s"):format(id, note)) end
+    -- Pool changes are saved at once; the board can wait for the
+    -- listener's periodic save.
+    if msg.t ~= "post" and msg.t ~= "gap" and sb.dirty then M.saveFleet() end
+    return
   end
-  if busyWith[id] and (msg.t == "output" or msg.t == "result") then
-    return   -- remoteRun owns this worker's stream right now
+
+  if msg.t == "alive" then
+    local w = workers[id]
+    if w then w.distance, w.relay = msg.distance, msg.relay end
+    sb:ackFrom(id, msg.ack, (cfg.resendAfter or 3) * 1000)
+    return
   end
+
+  local sink = sinks[id]
+  if sink and msg.t == "output" then
+    if sink.onOutput then sink.onOutput(msg.kind or "say", msg.text, msg.extra) end
+    return
+  end
+  if sink and msg.t == "result" and msg.job == sink.job then
+    if msg.situation and workers[id] then workers[id].situation = msg.situation end
+    sink.result = msg
+    if _G.os and os.queueEvent then os.queueEvent("ccagent_sink") end
+    return
+  end
+
   if msg.t == "hello" or msg.t == "state" then
     local isNew = workers[id] == nil
     workers[id] = workers[id] or {}
@@ -322,12 +277,16 @@ function M.handleStray(id, msg)
     workers[id].label     = msg.label or workers[id].label
     workers[id].lastSeen  = os.clock()
     workers[id].heardAt   = util.now()
+    if isNew or msg.t == "hello" then
+      -- A hello is a worker (re)starting: whatever it knew of the fleet
+      -- is gone, so it gets the current state.
+      net.send(id, sb:snapshot(), cfg.protocol)
+    end
     if isNew then
       console.head(("worker %d (%s) joined"):format(id, workers[id].label or "?"))
       target = target or id
       net.send(id, { t = "ack", text = "host " .. os.getComputerID() .. " here" },
                cfg.protocol)
-      net.send(id, M.fleetSnapshot(), cfg.protocol)
     end
   elseif msg.t == "ask" then
     console.head(("worker %d asks: %s"):format(id, tostring(msg.text)))
@@ -382,7 +341,7 @@ function M.launch(src, ids, name)
     w.busy, w.last = name or ("j" .. jobSeq), "launched"
     -- So a probe launched into a fleet already at work starts out knowing
     -- what the others have claimed.
-    net.send(id, M.fleetSnapshot(), cfg.protocol)
+    net.send(id, sb:snapshot(), cfg.protocol)
     net.send(id, { t = "run", job = ("j%d"):format(jobSeq), src = src }, cfg.protocol)
     sent[#sent + 1] = id
   end
@@ -414,7 +373,10 @@ net.onStray = function(id, msg)
 end
 
 --- For tests, which drive handleStray and launch without M.run.
-function M.configure(c) cfg = c end
+function M.configure(c)
+  cfg = c
+  sb = newSwitchboard()
+end
 
 --------------------------------------------------------------- dispatch ---
 
@@ -456,7 +418,11 @@ local HELP = {
   "/stop [id|all]    abort a running job",
   "/share [id]       save, then post, a worker's last run",
   "/forget [id|all] [x,y,z]  restart a worker's map here",
-  "/fleet [reset]    what workers posted and claimed",
+  "/fleet            board, claims and link per worker",
+  "/fleet work       every piece of work and who has it",
+  "/fleet tell <ids|all> <topic> [text]  message programs",
+  "/fleet relay <id> on|off  make a worker repeat rednet",
+  "/fleet reset      clear work and board",
   "/manifest         the API workers are given, and its token cost",
   "/notes <text>     house rules appended to the system prompt",
   "/model [id]       show or change the model",
@@ -583,15 +549,59 @@ local function command(input)
     end
 
   elseif cmd == "fleet" then
-    if rest == "reset" then
+    local sub, args = rest:match("^(%S*)%s*(.-)%s*$")
+    if sub == "reset" then
       M.fleetReset()
       for wid in pairs(workers) do net.send(wid, M.fleetSnapshot(), cfg.protocol) end
-      console.head("fleet board and claims cleared")
-    else
+      console.head("fleet work and board cleared")
+
+    elseif sub == "tell" then
+      -- "/fleet tell all recall", "/fleet tell 3,7 come home now": a
+      -- message from the operator into running programs, which read it
+      -- with fleet.receive. Queued and re-sent until each worker has it.
+      local spec, topic, text = args:match("^(%S+)%s+(%S+)%s*(.-)$")
+      local ids = spec and M.parseIds(spec)
+      if not (ids and topic) then
+        console.warn("usage: /fleet tell <id|all|ids> <topic> [text]")
+      else
+        sb:deliver("operator", ids, topic, text ~= "" and text or nil)
+        M.saveFleet()
+        console.head(("'%s' sent to %s"):format(topic, table.concat(ids, ",")))
+      end
+
+    elseif sub == "relay" then
+      local spec, onoff = args:match("^(%S+)%s*(%S*)$")
+      local ids = spec and M.parseIds(spec)
+      if not ids then console.warn("usage: /fleet relay <id> on|off")
+      else
+        local on = onoff ~= "off"
+        for _, id in ipairs(ids) do
+          net.send(id, { t = "relay", on = on }, cfg.protocol)
+        end
+        console.head(("relay %s sent to %s"):format(on and "on" or "off",
+                                                     table.concat(ids, ",")))
+      end
+
+    elseif sub == "work" then
+      local p = sb.pool
+      local names = util.keys(p.items)
+      for name in pairs(p.claims) do if not p.items[name] then names[#names + 1] = name end end
+      table.sort(names)
+      local c = sb:counts()
+      console.info(("%d open, %d taken, %d done"):format(c.open, c.taken, c.done))
+      for i, name in ipairs(names) do
+        if i > 40 then console.dim(("... %d more"):format(#names - 40)); break end
+        local holder = p.claims[name]
+        local state = p.done[name] and ("done by " .. tostring(holder))
+          or (holder and ("taken by " .. tostring(holder)) or "open")
+        console.dim(("%-20s %s"):format(name, state))
+      end
+
+    elseif sub == "" then
       local any = false
-      for _, id in ipairs(util.keys(fleetBoard)) do
+      for _, id in ipairs(util.keys(sb.board)) do
         any = true
-        local e = fleetBoard[id]
+        local e = sb.board[id]
         local bits = {}
         for _, k in ipairs(util.keys(e.facts)) do
           local v = e.facts[k]
@@ -603,8 +613,8 @@ local function command(input)
         console.dim(("%-4s %s"):format(tostring(id), table.concat(bits, " ")))
       end
       local per, fin = {}, {}
-      for name, holder in pairs(fleetClaims) do
-        if fleetDone[name] then fin[holder] = (fin[holder] or 0) + 1
+      for name, holder in pairs(sb.pool.claims) do
+        if sb.pool.done[name] then fin[holder] = (fin[holder] or 0) + 1
         else per[holder] = (per[holder] or 0) + 1 end
       end
       local now = util.now()
@@ -613,13 +623,24 @@ local function command(input)
         local heard = w.heardAt and math.floor((now - w.heardAt) / 1000)
         if per[id] or fin[id] or heard then
           any = true
-          console.dim(("%-4s %d active, %d done; heard %s%s"):format(
+          local q = sb:queued(id)
+          console.dim(("%-4s %d active, %d done; heard %s%s%s%s"):format(
             tostring(id), per[id] or 0, fin[id] or 0,
             heard and (heard .. "s ago") or "never",
-            w.distance and (", " .. math.floor(w.distance) .. " blocks") or ""))
+            w.distance and (", " .. math.floor(w.distance) .. " blocks") or "",
+            w.relay and ", RELAY" or "",
+            q > 0 and (", " .. q .. " msg queued") or ""))
         end
       end
+      local c = sb:counts()
+      if c.open + c.taken + c.done > 0 then
+        any = true
+        console.info(("work: %d open, %d taken, %d done (/fleet work)")
+          :format(c.open, c.taken, c.done))
+      end
       if not any then console.dim("nothing posted or claimed yet") end
+    else
+      console.warn("usage: /fleet [work|reset|tell|relay]")
     end
 
   elseif cmd == "share" then
@@ -827,15 +848,9 @@ local function listen()
     local now = util.now()
     if now - lastBeat >= (cfg.heartbeat or 10) * 1000 then
       lastBeat = now
-      net.broadcast({ t = "beat", modem = cfg.hostModem }, cfg.protocol)
-      for id, names in pairs(M.expireLeases(now)) do
-        if #names > 0 then
-          console.warn(("[%d] silent too long; %d claim(s) returned")
-            :format(id, #names))
-        end
-      end
+      M.beat(now)
     end
-    if fleetDirty and now - lastSave >= 10000 then
+    if sb.dirty and now - lastSave >= 10000 then
       lastSave = now
       M.saveFleet()
     end
@@ -863,10 +878,11 @@ function M.run()
   if not ok then console.err("no modem: " .. tostring(err)); return end
   if rednet.host then pcall(rednet.host, cfg.protocol, cfg.hostname) end
 
+  sb = newSwitchboard()
   if M.loadFleet() then
-    local n = 0
-    for _ in pairs(fleetClaims) do n = n + 1 end
-    console.dim(("fleet state restored: %d claim(s); /fleet reset to clear"):format(n))
+    local c = sb:counts()
+    console.dim(("fleet restored: %d open, %d taken, %d done; /fleet reset clears")
+      :format(c.open, c.taken, c.done))
   end
   net.broadcast({ t = "hostup" }, cfg.protocol)
   console.dim("announced as '" .. cfg.hostname .. "'. waiting for workers... (/help)")
