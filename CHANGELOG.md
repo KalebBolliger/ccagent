@@ -131,6 +131,22 @@ Versions are `agent.VERSION` in `agent/init.lua`, checkable at runtime with
 
 **Fixed**
 
+- The host acknowledged fleet messages it had not saved. Its state was
+  written on a ten-second timer while acknowledgements went out from
+  memory, so a host restarting in between had told workers to discard
+  messages it no longer had -- and then, waiting for them, refused every
+  later message from those workers for good. Duplicate output after a
+  restart was the visible half of the same gap. The heartbeat now saves
+  before it acknowledges; the file is written beside the old one and
+  moved into place (CC's `fs.move` refuses an existing destination, so
+  the old one is deleted first, and a load finds the new file if a
+  restart fell between the two); and every numbered message carries the
+  oldest number its sender still holds, so a receiver stuck below it
+  counts the gap as lost, says so, and carries on. The same number makes
+  a receiver with no count -- a rebooted worker, a host that lost its
+  file -- wait for the oldest message in flight instead of syncing to
+  whichever arrived first.
+
 - The host's run loop (`@id`, `/run`) no longer reads rednet while the
   background listener is running; it waits on a sink that the listener's
   dispatcher fills. With numbered messages two readers would not just

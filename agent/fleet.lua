@@ -130,9 +130,14 @@ local function session()
   return fleet.wire and fleet.wire.session or 0
 end
 
+--- low = the oldest number this worker still holds. A receiver waiting
+--- for anything below it is waiting for something gone for good -- most
+--- likely acknowledged by a host that then lost what it acknowledged --
+--- and should count it lost and move on rather than wait forever.
 local function stamp(e)
   local m = e.msg
-  m.rs = { s = session(), n = e.n, upto = e.upto }
+  m.rs = { s = session(), n = e.n, upto = e.upto,
+           low = outbox[1] and outbox[1].n or e.n }
   return m
 end
 
@@ -511,8 +516,13 @@ end
 local function deliverQueued(msg)
   local hs = msg.hs
   if type(hs) ~= "table" then return false end
-  if rxHost.s ~= hs.s then rxHost = { s = hs.s, last = hs.n - 1 } end
+  -- A host we have no count for: start at the oldest it still holds, so a
+  -- message lost in the air before this one is waited for, not skipped.
+  if rxHost.s ~= hs.s then rxHost = { s = hs.s, last = (hs.low or hs.n) - 1 } end
   if hs.n <= rxHost.last then return true end        -- duplicate: re-ack
+  if hs.low and hs.low > rxHost.last + 1 then
+    rxHost.last = hs.low - 1                          -- gone for good
+  end
   if hs.n ~= rxHost.last + 1 then return false end    -- gap: wait for resend
   rxHost.last = hs.n
   inbox[#inbox + 1] = { from = msg.from, label = msg.label, topic = msg.topic,

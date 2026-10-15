@@ -2377,6 +2377,95 @@ do
   ok(note and note.body == "kept",
      "a message queued before the restart is still delivered, once")
 
+  -- Acknowledged but never written down. The heartbeat tells a worker
+  -- "applied up to n", the worker throws those messages away, and the
+  -- host then restarts from a file older than n -- a save it had not got
+  -- round to yet, or a file it could not read back. The worker's next
+  -- message is n+1 and the host is waiting for an earlier one the worker
+  -- no longer has: without a way out, that worker is never heard again.
+  local disk = copy(host.switchboard():export()) -- what the file held
+  probes[6].post("a", 1)
+  probes[6].post("b", 2)
+  tick(5); host.beat(clock)
+  tick(5); host.beat(clock)                    -- acknowledged; discarded
+  ok(probes[6].link().pending == 0, "(the worker has let go of them)")
+  host.configure({ protocol = "ccagent", claimLease = 300, resendAfter = 3 })
+  host.switchboard():import(disk)              -- restart from the old file
+  probes[6].post("c", 3)
+  for _ = 1, 3 do tick(5); host.beat(clock) end
+  local b6 = host.switchboard().board[6]
+  ok(b6 and b6.facts.c == 3,
+     "a host restarted from an older file still hears the worker afterwards")
+  local toldLost = false
+  for _, l in ipairs(said) do
+    if l:find("lost: acknowledged, then forgotten", 1, true) then toldLost = true end
+  end
+  ok(toldLost, "and says that two messages were lost, rather than nothing")
+
+  -- Prevention: the heartbeat never acknowledges past what is on disk.
+  local savedLast, ackedN
+  local prevTU = _G.textutils
+  _G.textutils = {
+    serialize = function(t)
+      savedLast = t.rx and t.rx[6] and t.rx[6].last
+      return "saved"
+    end,
+    unserialize = prevTU.unserialize,
+  }
+  local bcast = _G.rednet.broadcast
+  _G.rednet.broadcast = function(msg)
+    if msg.t == "beat" then ackedN = msg.acks[6] and msg.acks[6].n end
+    return bcast(msg)
+  end
+  probes[6].post("d", 4)
+  tick(5); host.beat(clock)
+  ok(ackedN ~= nil and savedLast == ackedN,
+     "a heartbeat acknowledges only what has been saved",
+     tostring(savedLast) .. " vs " .. tostring(ackedN))
+  _G.rednet.broadcast = bcast
+
+  -- Saving replaces the file whole: written beside it, then moved in.
+  host.saveFleet()
+  host.saveFleet()
+  ok(mock.files["/.ccagent/fleet.dat"] == "saved" and
+     mock.files["/.ccagent/fleet.dat.new"] == nil,
+     "a save replaces the file and leaves nothing beside it")
+  -- Stopped between deleting the old file and moving the new one in.
+  mock.files["/.ccagent/fleet.dat.new"] = mock.files["/.ccagent/fleet.dat"]
+  mock.files["/.ccagent/fleet.dat"] = nil
+  local loadedFrom
+  _G.textutils.unserialize = function(text) loadedFrom = text; return {} end
+  host.loadFleet()
+  ok(loadedFrom == "saved", "an interrupted save is still found on restart")
+  _G.textutils = prevTU
+  mock.files["/.ccagent/fleet.dat.new"] = nil
+
+  -- The other direction: a worker that rebooted, with two operator
+  -- messages queued for it, and the first resend lost in the air.
+  inRange[4] = false
+  sb = host.switchboard()
+  sb:deliver("operator", { 4 }, "m", 1)
+  sb:deliver("operator", { 4 }, "m", 2)
+  probes[4].reset()                             -- rebooted: knows nothing
+  inRange[4] = true
+  local sends, realIoSend = 0, sb.io.send
+  sb.io.send = function(id, msg)
+    sends = sends + 1
+    if id == 4 and msg.hs and msg.hs.n == sb.tx[4].queue[1].n and sends == 1 then
+      return                                    -- the first one is lost
+    end
+    return realIoSend(id, msg)
+  end
+  tick(5)
+  sb:ackFrom(4, probes[4].hostAck(), 3000)      -- resend both, first lost
+  sb.io.send = realIoSend
+  ok(probes[4].inbox("m") == 0,
+     "a rebooted worker waits for the oldest queued message, not the first to arrive")
+  for _ = 1, 3 do tick(5); host.beat(clock) end
+  local m1, m2 = probes[4].receive(0, "m"), probes[4].receive(0, "m")
+  ok(m1 and m2 and m1.body == 1 and m2.body == 2 and probes[4].inbox("m") == 0,
+     "then gets both, in order, once")
+
   for k, f in pairs(saved) do console[k] = f end
   _G.rednet, _G._TEST, os.getComputerID = prevRednet, prevTest, prevId
   os.epoch = prevEpoch

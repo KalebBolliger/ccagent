@@ -56,29 +56,38 @@ end
 --------------------------------------------------------- from workers --
 
 --- Gate a message from a worker. Returns the message when it should be
---- applied now, nil when it is a duplicate or arrived out of order.
+--- applied now (nil when it is a duplicate or arrived out of order), and
+--- a note for the operator when messages were found to be lost.
+---
+--- rs.low is the oldest message the worker still holds. Starting a count
+--- there, rather than at whatever arrived first, waits for anything lost
+--- in the air before it instead of writing it off as already seen. And a
+--- count stuck below low is waiting for messages the worker discarded
+--- after an acknowledgement this host has since lost (a restart from an
+--- older or unreadable file): they cannot come, so they are counted lost
+--- and the count moves on. Without that, the worker is never heard again.
 function SB:accept(id, msg)
   local rs = msg.rs
   if type(rs) ~= "table" then return msg end
+  local low = rs.low or rs.n
   local r = self.rx[id]
-  if not r then
-    -- Never heard from (or this host lost its file): join the count
-    -- wherever it is. Nothing better is possible.
-    r = { s = rs.s, last = rs.n - 1 }
-    self.rx[id] = r
-  elseif r.s ~= rs.s then
-    -- The worker rebooted. Its numbering restarts at 1 and it re-sends
-    -- from 1, so wait for 1: syncing to whatever arrived first would
-    -- write off everything lost in the air before it as "already seen".
-    if rs.n ~= 1 then return nil end
-    r = { s = rs.s, last = 0 }
+  if not r or r.s ~= rs.s then
+    -- Never heard from, a lost file, or the worker rebooted (its count
+    -- restarts at 1 and low says so).
+    r = { s = rs.s, last = low - 1 }
     self.rx[id] = r
   end
   if rs.n <= r.last then return nil end
-  if rs.n ~= r.last + 1 then return nil end
+  local note
+  if low > r.last + 1 then
+    note = ("%d message(s) lost: acknowledged, then forgotten by this host")
+      :format(low - 1 - r.last)
+    r.last = low - 1
+  end
+  if rs.n ~= r.last + 1 then return nil, note end
   r.last = rs.upto or rs.n
   self.dirty = true
-  return msg
+  return msg, note
 end
 
 --- For the heartbeat: what has been applied, per worker.
@@ -90,6 +99,13 @@ end
 
 ------------------------------------------------------------ to workers --
 
+--- Stamp with the oldest message still queued for that worker (low), for
+--- the same reason a worker does: see accept().
+local function stampLow(t, msg)
+  msg.hs.low = t.queue[1] and t.queue[1].n or msg.hs.n
+  return msg
+end
+
 local function enqueue(self, id, msg)
   local t = self.tx[id] or { n = 0, queue = {} }
   self.tx[id] = t
@@ -97,7 +113,7 @@ local function enqueue(self, id, msg)
   msg.hs = { s = self.session, n = t.n }
   local e = { n = t.n, msg = msg, sent = self.io.now() }
   t.queue[#t.queue + 1] = e
-  self.io.send(id, msg)
+  self.io.send(id, stampLow(t, msg))
   self.dirty = true
 end
 
@@ -113,7 +129,7 @@ function SB:ackFrom(id, ack, resendAfterMs)
   for _, e in ipairs(t.queue) do
     if now - (e.sent or 0) >= (resendAfterMs or 3000) then
       e.sent = now
-      self.io.send(id, e.msg)
+      self.io.send(id, stampLow(t, e.msg))
       n = n + 1
     end
   end

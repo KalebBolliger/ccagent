@@ -356,6 +356,22 @@ The host saves the pool, board, delivery state and its own session number
 to `/.ccagent/fleet.dat`; the session must survive a restart, or workers
 would mistake the restarted host's numbering for a new conversation.
 
+**Never acknowledge what is not written down.** An acknowledgement is a
+promise the sender acts on: the worker deletes what the host acknowledged.
+The first version saved fleet state on a ten-second timer and acknowledged
+from memory, so a host restarting inside that window had promised to keep
+messages that now existed nowhere -- and, waiting for them, refused every
+later message from that worker forever. (Its visible symptom, the cheap
+direction of the same gap, was output printed twice after a restart.) So
+`M.beat` saves before it acknowledges, the file is written beside the old
+one and moved into place, and every numbered message carries `low`, the
+oldest its sender still holds: a receiver whose count is below `low` is
+waiting for something gone, says how much was lost, and moves on. The
+same `low` makes a fresh count start at the oldest message still in flight
+rather than at whichever arrived first. Any new acknowledged channel needs
+both: durable before acknowledged, and a way out when that was violated
+anyway.
+
 ## Where the system is deliberately unfinished
 
 `claude/executor.lua`'s contract is `run(code, env, opts) -> result` —

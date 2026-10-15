@@ -172,18 +172,29 @@ local function newSwitchboard()
   })
 end
 
+--- Written to a new file and moved into place, so a chunk unloading
+--- mid-write leaves the old file or the new one, never half of one.
 function M.saveFleet()
   sb.dirty = false
   if not (_G.fs and _G.textutils) then return end
-  local h = fs.open(FLEET_FILE, "w")
+  local tmp = FLEET_FILE .. ".new"
+  local h = fs.open(tmp, "w")
   if not h then return end
   h.write(textutils.serialize(sb:export()))
   h.close()
+  if fs.exists(FLEET_FILE) then fs.delete(FLEET_FILE) end
+  fs.move(tmp, FLEET_FILE)
 end
 
 function M.loadFleet()
-  if not (_G.fs and _G.textutils and fs.exists(FLEET_FILE)) then return false end
-  local h = fs.open(FLEET_FILE, "r")
+  if not (_G.fs and _G.textutils) then return false end
+  -- Stopped between the delete and the move: the new file is complete.
+  local path = FLEET_FILE
+  if not fs.exists(path) and fs.exists(FLEET_FILE .. ".new") then
+    path = FLEET_FILE .. ".new"
+  end
+  if not fs.exists(path) then return false end
+  local h = fs.open(path, "r")
   if not h then return false end
   local ok, data = pcall(textutils.unserialize, h.readAll() or "")
   h.close()
@@ -209,6 +220,10 @@ end
 --- One heartbeat: tell every worker we are here and what of theirs we
 --- have applied (acks), then take back the work of the silent ones.
 function M.beat(now)
+  -- Never acknowledge what is not written down. A worker discards what
+  -- the host acknowledges; if the host then restarted from a file older
+  -- than its acknowledgements, those messages would exist nowhere.
+  if sb.dirty then M.saveFleet() end
   net.broadcast({ t = "beat", modem = cfg.hostModem, acks = sb:acks() },
                 cfg.protocol)
   return M.expireLeases(now)
@@ -238,7 +253,9 @@ function M.handleStray(id, msg)
   if workers[id] then workers[id].heardAt = util.now() end
 
   -- Duplicates and early arrivals of numbered messages stop here.
-  msg = sb:accept(id, msg)
+  local note
+  msg, note = sb:accept(id, msg)
+  if note then console.warn(("[%d] %s"):format(id, note)) end
   if not msg then return end
 
   if FLEET_MSG[msg.t] then
